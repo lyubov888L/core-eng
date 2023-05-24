@@ -9,7 +9,8 @@ members = [
   "stacks-doctor",
   "test-utils",
   "test-vectors",
-  "yarpc"]
+  "yarpc",
+  "first-build"]
 
 [workspace.dependencies]
 bs58 = "0.4"
