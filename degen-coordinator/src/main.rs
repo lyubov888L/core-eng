@@ -3,17 +3,17 @@ use std::error::Error;
 use std::str::FromStr;
 
 use bitcoin::secp256k1::SecretKey;
+use tracing::{debug, info, warn};
+use wsts::Scalar;
 
 use frost_signer::{
-    net::{Message},
+    net::Message,
     signing_round::{
         DkgBegin,
         DkgPublicShare,
-        MessageTypes
+        MessageTypes,
     },
 };
-use tracing::{debug, info, warn};
-use wsts::Scalar;
 use frost_signer::signing_round::Signable;
 
 fn main() {
@@ -22,9 +22,12 @@ fn main() {
     let BOB: SecretKey = SecretKey::from_str("91436bd90d9cde7ba3162375b7692ae3f22ad01586cb4520bffae48d3a480f6a")
         .unwrap();
 
-    let miner_coordinator = MinerCoordinator::new();
+    let mut miner_coordinator = MinerCoordinator::new();
     let alice_miner_signer = MinerSigner::new(String::from("Alice"));
     let bob_miner_signer = MinerSigner::new(String::from("Bob"));
+
+    info!("Andrei is here have no fear");
+    miner_coordinator.run_static_key_generation(&[alice_miner_signer, bob_miner_signer]);
 }
 
 struct MinerCoordinator {
@@ -42,14 +45,14 @@ impl MinerCoordinator {
             current_dkg_id: 0,
             current_dkg_public_id: 0,
             dkg_public_shares: Default::default(),
-            network_private_key
+            network_private_key,
         }
     }
 
-    fn run_static_key_generation(&mut self) {
+    fn run_static_key_generation(&mut self, miners: &[MinerSigner]) {
         self.current_dkg_id = self.current_dkg_id.wrapping_add(1);
         info!("Starting DKG round #{}", self.current_dkg_id);
-        self.start_public_shares();
+        self.start_public_shares(miners);
 
         // let public_key = self.wait_for_public_shares()?;
 
@@ -59,7 +62,7 @@ impl MinerCoordinator {
         // Ok(public_key)
     }
 
-    fn start_public_shares(&mut self) -> Result<(), ()> {
+    fn start_public_shares(&mut self, miners: &[MinerSigner]) -> Result<(), ()> {
         self.dkg_public_shares.clear();
 
         info!(
@@ -77,6 +80,8 @@ impl MinerCoordinator {
         };
         // self.network.send_message(dkg_begin_message)?;
 
+        miners.iter().for_each(|miner| miner.receive_message(&dkg_begin_message));
+
         Ok(())
     }
 }
@@ -93,7 +98,7 @@ impl MinerSigner {
         }
     }
 
-    pub fn receive_message(&self) {
+    pub fn receive_message(&self, message: &Message) {
         info!("{} received message", self.name)
     }
 }
