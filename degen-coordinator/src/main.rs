@@ -36,12 +36,13 @@ struct MinerCoordinator {
 
 impl MinerCoordinator {
     fn new() -> Self {
+        let private_key = String::from("9aSCCR6eirt1NAHwJtSz4HMwBHTyMo62SyPMvVDt5DQn");
+        let network_private_key: Scalar = Scalar::try_from(private_key.as_str()).unwrap();
         Self {
             current_dkg_id: 0,
             current_dkg_public_id: 0,
             dkg_public_shares: Default::default(),
-            // TODO
-            network_private_key: Scalar::from()
+            network_private_key
         }
     }
 
