@@ -93,6 +93,23 @@ pub trait Coordinator: Sized {
     fn bitcoin_node(&self) -> &Self::BitcoinNode;
 
     // Provided methods
+    fn degen_run_one(mut self) -> Result<()> {
+        let (sender, receiver) = mpsc::channel::<Command>();
+        Self::poll_ping_thread(sender);
+
+        loop {
+            match receiver.recv()? {
+                Command::Stop => break,
+                Command::Timeout => {
+                    println!("Timeout on connection");
+                    self.peg_queue().poll(self.stacks_node())?;
+                    self.process_queue()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn run(mut self) -> Result<()> {
         let (sender, receiver) = mpsc::channel::<Command>();
         Self::poll_ping_thread(sender);
@@ -127,9 +144,23 @@ pub trait Coordinator: Sized {
     }
 }
 
+// Degens helper functions
+trait DegenCoordinator: Coordinator {
+    fn create_transaction(&mut self) {
+        // Retreive the utxos
+        let utxos = self
+            .bitcoin_node()
+            .list_unspent(self.fee_wallet().bitcoin().address());
+    }
+}
+impl<T: Coordinator> DegenCoordinator for T {}
+
+
+
 // Private helper functions
 trait CoordinatorHelpers: Coordinator {
     fn peg_in(&mut self, op: stacks_node::PegInOp) -> Result<()> {
+        println!("Peg In");
         // Retrieve the nonce from the stacks node using the sBTC wallet address
         let nonce = self
             .stacks_node()
@@ -146,6 +177,7 @@ trait CoordinatorHelpers: Coordinator {
         Ok(())
     }
 
+    // This is what we need to do...
     fn peg_out(&mut self, op: stacks_node::PegOutRequestOp) -> Result<()> {
         // Retrieve the nonce from the stacks node using the sBTC wallet address
         let nonce = self
@@ -165,7 +197,8 @@ trait CoordinatorHelpers: Coordinator {
         let fulfill_tx = self.fulfill_peg_out(&op)?;
 
         // Broadcast the resulting BTC transaction to the Bitcoin node
-        self.bitcoin_node().broadcast_transaction(&fulfill_tx)?;
+        // self.bitcoin_node().broadcast_transaction(&fulfill_tx)?;
+        println!("Success on transaction");
         Ok(())
     }
 
@@ -264,6 +297,7 @@ impl TryFrom<Config> for StacksCoordinator {
         // This should not be run on startup unless required:
         // 1. No aggregate public key stored in persitent storage anywhere
         // 2. no address already set in sbtc contract (get-bitcoin-wallet-address)
+        // X This is getting the public key from the coordinator
         let pubkey = frost_coordinator.get_aggregate_public_key()?;
         let xonly_pubkey =
             PublicKey::from_slice(&pubkey.x().to_bytes()).map_err(Error::InvalidPublicKey)?;

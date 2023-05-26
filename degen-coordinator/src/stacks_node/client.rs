@@ -58,8 +58,8 @@ impl NodeClient {
     }
 
     fn get_burn_ops<T>(&self, block_height: u64, op: &str) -> Result<Vec<T>, StacksNodeError>
-    where
-        T: serde::de::DeserializeOwned,
+        where
+            T: serde::de::DeserializeOwned,
     {
         let json = self
             .get_response(&format!("/v2/burn_ops/{block_height}/{op}"))?
@@ -105,32 +105,47 @@ impl StacksNode for NodeClient {
             .ok_or_else(|| StacksNodeError::InvalidJsonEntry(entry.to_string()))
     }
 
+    // SBTC contracts are not there.
     fn broadcast_transaction(&self, tx: &StacksTransaction) -> Result<(), StacksNodeError> {
-        debug!("Broadcasting transaction...");
-        let url = self.build_url("/v2/transactions");
-        let mut buffer = vec![];
-
-        tx.consensus_serialize(&mut buffer)?;
-
-        let response = self
-            .client
-            .post(url)
-            .header("content-type", "application/octet-stream")
-            .body(buffer)
-            .send()?;
-
-        if response.status() != StatusCode::OK {
-            let json_response = response
-                .json::<serde_json::Value>()
-                .map_err(|_| StacksNodeError::BehindChainTip)?;
-            let error_str = json_response.as_str().unwrap_or("Unknown Reason");
-            warn!(
-                "Failed to broadcast transaction to the stacks node: {:?}",
-                error_str
-            );
-            return Err(StacksNodeError::BroadcastFailure(error_str.to_string()));
-        }
+        debug!("Broadcasting transaction... Nope... ");
         Ok(())
+        // let url = self.build_url("/v2/transactions");
+        // let mut buffer = vec![];
+        //
+        // tx.consensus_serialize(&mut buffer)?;
+        // println!( "{:?}", &tx);
+        //
+        // let req = self
+        //     .client
+        //     .post(url)
+        //     .header("content-type", "application/octet-stream")
+        //     .body(buffer)
+        //     .build()?;
+        //
+        // println!("{:#?}", &req.body().unwrap());
+
+        // let response = self.client.execute(req)?;
+        // let response = self
+        //     .client
+        //     .post(url)
+        //     .header("content-type", "application/octet-stream")
+        //     .body(buffer)
+        //     .send()?;
+        //
+        // if response.status() != StatusCode::OK {
+        //     println!("{:#?}", &response);
+        //     println!("{:#?}", &response.status());
+        //     let json_response = response
+        //         .json::<serde_json::Value>()
+        //         .map_err(|_| StacksNodeError::BehindChainTip)?;
+        //     let error_str = json_response.as_str().unwrap_or("Unknown Reason");
+        //     warn!(
+        //         "Failed to broadcast transaction to the stacks node: {:?}",
+        //         error_str
+        //     );
+        //     return Err(StacksNodeError::BroadcastFailure(error_str.to_string()));
+        // }
+        // Ok(())
     }
 }
 

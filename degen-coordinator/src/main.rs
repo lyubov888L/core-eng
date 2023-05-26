@@ -22,6 +22,13 @@ fn main() {
                 Ok(mut coordinator) => {
                     // Determine what action the caller wishes to perform
                     match cli.command {
+                        Command::DegenRunOne => {
+                            info!("Running Coordinator in Degen Run One");
+                            //TODO: set up coordination with the stacks node
+                            if let Err(e) = coordinator.degen_run_one() {
+                                error!("An error occurred running the coordinator: {}", e);
+                            }
+                        }
                         Command::Run => {
                             info!("Running Coordinator");
                             //TODO: set up coordination with the stacks node

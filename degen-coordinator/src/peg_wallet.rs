@@ -39,6 +39,11 @@ pub trait StacksWallet {
 
 pub trait BitcoinWallet {
     type Error: Debug;
+    // Builds a degenerate transaction
+    // fn fulfill_degen(
+    //     &self,
+    //     txouts: Vec<UTXO>,
+    // ) -> Result<bitcoin_node::BitcoinTransaction, Error>;
     // Builds a fulfilled unsigned transaction using the provided utxos to cover the spend amount
     fn fulfill_peg_out(
         &self,

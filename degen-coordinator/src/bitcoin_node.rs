@@ -8,6 +8,7 @@ use bitcoin::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, warn};
+
 pub trait BitcoinNode {
     /// Broadcast the BTC transaction to the bitcoin node
     fn broadcast_transaction(&self, tx: &BitcoinTransaction) -> Result<Txid, Error>;
@@ -133,15 +134,35 @@ impl LocalhostBitcoinNode {
         debug!("Making Bitcoin RPC {} call...", method);
         let json_rpc =
             ureq::json!({"jsonrpc": "2.0", "id": "stx", "method": method, "params": params});
-        let response = ureq::post(&self.bitcoind_api)
-            .send_json(json_rpc)
-            .map_err(|e| Error::RPCError(e.to_string()))?;
-        let json_response = response.into_json::<serde_json::Value>()?;
-        let json_result = json_response
-            .get("result")
-            .ok_or_else(|| Error::InvalidResponseJSON("Missing entry 'result'.".to_string()))?
-            .to_owned();
-        Ok(json_result)
+        println!("{:#?}", &json_rpc);
+        // let response =
+        match ureq::post(&self.bitcoind_api)
+            .send_json(json_rpc) {
+            Ok(response) => {
+                let json_response = response.into_json::<serde_json::Value>()?;
+                let json_result = json_response
+                    .get("result")
+                    .ok_or_else(|| Error::InvalidResponseJSON("Missing entry 'result'.".to_string()))?
+                    .to_owned();
+                Ok(json_result)
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                println!("Response {:#?}", &response);
+                println!("JSON response {:#?}", &response.into_json()?);
+                println!("JSON response {:#?}", &response.into_string()?);
+                Err(Error::RPCError("Andrei".to_string()))
+            }
+            Err(_) => {Err(Error::RPCError("Andrei".to_string()))}
+        }
+        // let response = ureq::post(&self.bitcoind_api)
+        //     .send_json(json_rpc)
+        //     .map_err(|e| Error::RPCError(e.to_string()))?;
+        // let json_response = response.into_json::<serde_json::Value>()?;
+        // let json_result = json_response
+        //     .get("result")
+        //     .ok_or_else(|| Error::InvalidResponseJSON("Missing entry 'result'.".to_string()))?
+        //     .to_owned();
+        // Ok(json_result)
     }
 
     fn create_empty_wallet(&self) -> Result<(), Error> {
