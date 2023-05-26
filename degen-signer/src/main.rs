@@ -1,8 +1,8 @@
 use clap::Parser;
 use frost_signer::config::Config;
 use frost_signer::logging;
-use stacks_signer::cli::{Cli, Command};
-use stacks_signer::signer::Signer;
+use degen_signer::cli::{Cli, Command};
+use degen_signer::signer::Signer;
 use tracing::info;
 use wsts::Point;
 
@@ -19,7 +19,7 @@ fn main() {
             match Config::from_path(&config) {
                 Ok(config) => {
                     let mut signer = Signer::new(config, id);
-                    info!("{} signer id #{}", stacks_signer::version(), id); // sign-on message
+                    info!("{} signer id #{}", degen_signer::version(), id); // sign-on message
                     if let Err(e) = signer.start_p2p_sync() {
                         panic!("An error occurred on the P2P Network: {}", e);
                     }

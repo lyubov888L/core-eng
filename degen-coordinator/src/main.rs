@@ -1,8 +1,8 @@
 use clap::Parser;
 use frost_signer::logging;
-use stacks_coordinator::cli::{Cli, Command};
-use stacks_coordinator::config::Config;
-use stacks_coordinator::coordinator::{Coordinator, StacksCoordinator};
+use degen_coordinator::cli::{Cli, Command};
+use degen_coordinator::config::Config;
+use degen_coordinator::coordinator::{Coordinator, StacksCoordinator};
 use tracing::{error, info, warn};
 
 fn main() {
