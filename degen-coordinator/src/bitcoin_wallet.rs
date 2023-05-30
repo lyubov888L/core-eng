@@ -229,7 +229,7 @@ mod tests {
         let public_key =
             PublicKey::from_str("cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115")
                 .expect("Failed to construct a valid public key for the bitcoin wallet");
-        BitcoinWallet::new(public_key, bitcoin::Network::Testnet)
+        BitcoinWallet::new(public_key, bitcoin::Network::Regtest)
     }
 
     /// Helper function for building a random txid (32 byte hex string)

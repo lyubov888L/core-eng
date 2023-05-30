@@ -282,6 +282,7 @@ impl TryFrom<Config> for StacksCoordinator {
         {
             Network::Mainnet => (TransactionVersion::Mainnet, bitcoin::Network::Bitcoin),
             Network::Testnet => (TransactionVersion::Testnet, bitcoin::Network::Testnet),
+            Network::Regtest => (TransactionVersion::Testnet, bitcoin::Network::Regtest),
         };
 
         // Create the frost coordinator and use it to generate the aggregate public key and corresponding bitcoin wallet address
@@ -324,7 +325,7 @@ impl TryFrom<Config> for StacksCoordinator {
         local_stacks_node.broadcast_transaction(&tx)?;
 
         let local_bitcoin_node = LocalhostBitcoinNode::new(config.bitcoin_node_rpc_url.clone());
-        local_bitcoin_node.load_wallet(bitcoin_wallet.address())?;
+        // local_bitcoin_node.load_wallet(bitcoin_wallet.address())?;
 
         let local_fee_wallet = WrapPegWallet {
             bitcoin_wallet,

@@ -85,7 +85,7 @@ impl BitcoinNode for LocalhostBitcoinNode {
     fn load_wallet(&self, address: &BitcoinAddress) -> Result<(), Error> {
         let result = self.create_empty_wallet();
         if let Err(Error::RPCError(message)) = &result {
-            if !message.ends_with("Database already exists.\"") {
+            if !message.ends_with("Database already exists.") {
                 return result;
             }
             // If the database already exists, no problem. Just emit a warning.
@@ -120,6 +120,18 @@ impl BitcoinNode for LocalhostBitcoinNode {
     }
 }
 
+
+#[derive(Debug, Deserialize)]
+struct RpcErrorResponse {
+    error: RpcError,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcError {
+    code: i32,
+    message: String,
+}
+
 impl LocalhostBitcoinNode {
     pub fn new(bitcoind_api: String) -> LocalhostBitcoinNode {
         Self { bitcoind_api }
@@ -147,12 +159,13 @@ impl LocalhostBitcoinNode {
                 Ok(json_result)
             }
             Err(ureq::Error::Status(code, response)) => {
-                println!("Response {:#?}", &response);
-                println!("JSON response {:#?}", &response.into_json()?);
-                println!("JSON response {:#?}", &response.into_string()?);
-                Err(Error::RPCError("Andrei".to_string()))
+                let rpc_response: RpcErrorResponse = serde_json::from_str(&response.into_string().unwrap()).unwrap();
+                println!("Response {:#?}", &rpc_response);
+                // println!("JSON response {:#?}", &response.into_json()?);
+                // println!("JSON response {:#?}", &response.into_string()?);
+                Err(Error::RPCError(rpc_response.error.message))
             }
-            Err(_) => {Err(Error::RPCError("Andrei".to_string()))}
+            Err(error) => { Err(Error::RPCError(error.to_string())) }
         }
         // let response = ureq::post(&self.bitcoind_api)
         //     .send_json(json_rpc)
@@ -166,7 +179,7 @@ impl LocalhostBitcoinNode {
     }
 
     fn create_empty_wallet(&self) -> Result<(), Error> {
-        let wallet_name = "";
+        let wallet_name = "test";
         let disable_private_keys = false;
         let blank = true;
         let passphrase = "";
