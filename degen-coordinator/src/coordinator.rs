@@ -87,6 +87,7 @@ pub trait Coordinator: Sized {
     fn peg_queue(&self) -> &Self::PegQueue;
     fn fee_wallet_mut(&mut self) -> &mut Self::FeeWallet;
     fn fee_wallet(&self) -> &Self::FeeWallet;
+    // QQ: Deployer why is there a frost_coordinator and one mut?
     fn frost_coordinator(&self) -> &FrostCoordinator;
     fn frost_coordinator_mut(&mut self) -> &mut FrostCoordinator;
     fn stacks_node(&self) -> &Self::StacksNode;
@@ -94,6 +95,8 @@ pub trait Coordinator: Sized {
 
     // Provided methods
     fn degen_run_one(mut self) -> Result<()> {
+        self.frost_coordinator_mut().run_degen_create_funding_txs();
+
         let (sender, receiver) = mpsc::channel::<Command>();
         Self::poll_ping_thread(sender);
 

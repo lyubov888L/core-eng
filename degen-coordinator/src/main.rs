@@ -21,6 +21,7 @@ fn main() {
             match StacksCoordinator::try_from(config) {
                 Ok(mut coordinator) => {
                     // Determine what action the caller wishes to perform
+                    println!("{:?}", cli.command);
                     match cli.command {
                         Command::DegenRunOne => {
                             info!("Running Coordinator in Degen Run One");
