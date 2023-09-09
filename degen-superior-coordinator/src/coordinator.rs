@@ -47,7 +47,7 @@ use crate::peg_queue::{
 };
 use crate::stacks_node::{client::NodeClient, StacksNode};
 
-type FrostCoordinator = frost_coordinator::coordinator::Coordinator<HttpNetListen>;
+type FrostCoordinator = degen_base_coordinator::coordinator::Coordinator<HttpNetListen>;
 
 /// Helper that uses this module's error type
 pub type Result<T> = std::result::Result<T, Error>;
