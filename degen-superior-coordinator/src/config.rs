@@ -1,3 +1,6 @@
+use std::str::FromStr;
+use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use bitcoin::{KeyPair, XOnlyPublicKey};
 use blockstack_lib::{
     address::AddressHashMode,
     burnchains::Address,
@@ -6,6 +9,11 @@ use blockstack_lib::{
     vm::ContractName,
 };
 use url::Url;
+use degen_base_signer::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode};
+use degen_base_signer::bitcoin_wallet::BitcoinWallet;
+use degen_base_signer::peg_wallet::BitcoinWallet as BitcoinWalletTrait;
+use degen_base_signer::stacks_node::client::NodeClient;
+use degen_base_signer::stacks_wallet::StacksWallet;
 
 use crate::util::address_version;
 
@@ -21,10 +29,12 @@ pub enum Error {
     TomlError(#[from] toml::de::Error),
     #[error("Invalid config file. {0}")]
     InvalidConfig(String),
-    #[error("Invalid sbtc_contract. {0}")]
+    #[error("Invalid mining_contract. {0}")]
     InvalidContract(String),
     #[error("Failed to parse stacks_private_key: {0}")]
     InvalidPrivateKey(String),
+    #[error("Failed to parse bitcoin_private_key: {0}")]
+    InvalidBitcoinPrivateKey(String),
 }
 
 #[derive(serde::Deserialize)]
@@ -36,10 +46,11 @@ pub enum Network {
 
 #[derive(serde::Deserialize, Default)]
 pub struct RawConfig {
-    pub sbtc_contract: String,
+    pub mining_contract: String,
     pub stacks_private_key: String,
     pub stacks_node_rpc_url: String,
     pub bitcoin_node_rpc_url: String,
+    pub bitcoin_private_key: String,
     pub frost_dkg_round_id: u64,
     pub signer_config_path: Option<String>,
     pub start_block_height: Option<u64>,
@@ -62,8 +73,9 @@ impl RawConfig {
         Ok(config)
     }
 
+    // TODO will use: implement this when necessary
     pub fn parse_contract(&self) -> Result<(ContractName, StacksAddress), Error> {
-        let mut split = self.sbtc_contract.split('.');
+        let mut split = self.mining_contract.split('.');
         let contract_address = split
             .next()
             .ok_or(Error::InvalidContract("Missing address".to_string()))?;
@@ -91,11 +103,21 @@ impl RawConfig {
             1,
             &vec![pk],
         )
-        .ok_or(Error::InvalidPrivateKey(
-            "Failed to generate stacks address from private key.".to_string(),
-        ))?;
+            .ok_or(Error::InvalidPrivateKey(
+                "Failed to generate stacks address from private key.".to_string(),
+            ))?;
 
         Ok((sender_key, address))
+    }
+
+    pub fn parse_bitcoin_private_key(&self) -> Result<(SecretKey, XOnlyPublicKey), Error> {
+        let secp = Secp256k1::new();
+        let sender_key = SecretKey::from_str(&self.bitcoin_private_key)
+            .map_err(|e| Error::InvalidBitcoinPrivateKey(e.to_string()))?;
+        let key_pair_source = KeyPair::from_secret_key(&secp, &sender_key);
+        let (xonly_public_key, _) = key_pair_source.x_only_public_key();
+
+        Ok((sender_key, xonly_public_key))
     }
 
     pub fn parse_version(&self) -> (TransactionVersion, bitcoin::Network) {
@@ -114,6 +136,12 @@ pub struct Config {
     pub stacks_address: StacksAddress,
     pub stacks_node_rpc_url: Url,
     pub bitcoin_node_rpc_url: Url,
+    pub local_stacks_node: NodeClient,
+    pub stacks_wallet: StacksWallet,
+    pub local_bitcoin_node: LocalhostBitcoinNode,
+    pub bitcoin_wallet: BitcoinWallet,
+    pub bitcoin_private_key: SecretKey,
+    pub bitcoin_xpub: XOnlyPublicKey,
     pub frost_dkg_round_id: u64,
     pub signer_config_path: Option<String>,
     pub start_block_height: Option<u64>,
@@ -154,17 +182,47 @@ impl TryFrom<RawConfig> for Config {
         let (contract_name, contract_address) = config.parse_contract()?;
         let (stacks_version, bitcoin_network) = config.parse_version();
         let (stacks_private_key, stacks_address) = config.parse_stacks_private_key()?;
+        let (bitcoin_private_key, bitcoin_address) = config.parse_bitcoin_private_key()?;
+
+        let stacks_node_rpc_url = Url::parse(&config.stacks_node_rpc_url)
+            .map_err(|e| Error::InvalidConfig(format!("Invalid stacks_node_rpc_url: {}", e)))?;
+
+        let bitcoin_node_rpc_url = Url::parse(&config.bitcoin_node_rpc_url)
+            .map_err(|e| Error::InvalidConfig(format!("Invalid bitcoin_node_rpc_url: {}", e)))?;
+
+        let local_stacks_node = NodeClient::new(
+            stacks_node_rpc_url.clone(),
+            contract_name.clone(),
+            contract_address,
+        );
+
+        let stacks_wallet = StacksWallet::new(
+            contract_name.clone(),
+            contract_address,
+            stacks_private_key,
+            stacks_address,
+            stacks_version,
+            config.transaction_fee.clone(),
+        );
+
+        let bitcoin_wallet = BitcoinWallet::new(bitcoin_address, bitcoin_network);
+
+        let local_bitcoin_node = LocalhostBitcoinNode::new(bitcoin_node_rpc_url.clone());
+        local_bitcoin_node.load_wallet(bitcoin_wallet.address()).unwrap();
 
         Ok(Self {
             contract_name,
             contract_address,
             stacks_private_key,
             stacks_address,
-            stacks_node_rpc_url: Url::parse(&config.stacks_node_rpc_url)
-                .map_err(|e| Error::InvalidConfig(format!("Invalid stacks_node_rpc_url: {}", e)))?,
-            bitcoin_node_rpc_url: Url::parse(&config.bitcoin_node_rpc_url).map_err(|e| {
-                Error::InvalidConfig(format!("Invalid bitcoin_node_rpc_url: {}", e))
-            })?,
+            stacks_node_rpc_url,
+            bitcoin_node_rpc_url,
+            local_stacks_node,
+            stacks_wallet,
+            local_bitcoin_node,
+            bitcoin_wallet,
+            bitcoin_private_key,
+            bitcoin_xpub: bitcoin_address,
             frost_dkg_round_id: config.frost_dkg_round_id,
             signer_config_path: config.signer_config_path,
             start_block_height: config.start_block_height,
@@ -197,8 +255,9 @@ mod tests {
     use std::io::Write;
     use tempdir::TempDir;
 
+    // TODO: degens - update accordingly with mining
     fn write_new_config(
-        sbtc_contract: String,
+        mining_contract: String,
         stacks_private_key: String,
         signer_config_file: Option<String>,
         http_relay_url: Option<String>,
@@ -210,7 +269,7 @@ mod tests {
         let mut coord_file = std::fs::File::create(&file_path).unwrap();
         let mut coord_contents = format!(
             r#"
-sbtc_contract = "{sbtc_contract}"
+mining_contract = "{mining_contract}"
 stacks_private_key = "{stacks_private_key}"
 stacks_node_rpc_url = "http://localhost:20443"
 bitcoin_node_rpc_url = "http://localhost:9776"
@@ -239,45 +298,45 @@ transaction_fee = 2000
 
     #[test]
     fn config_from_raw() {
-        let sbtc_contract_address = "ST3N4AJFZZYC4BK99H53XP8KDGXFGQ2PRSPNET8TN";
-        let sbtc_contract_name = "sbtc-alpha";
+        let mining_contract_address = "ST3N4AJFZZYC4BK99H53XP8KDGXFGQ2PRSPNET8TN";
+        let mining_contract_name = "sbtc-alpha";
         let stacks_private_key = PRIVATE_KEY_HEX;
 
         // Test config with signer_config_file
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             stacks_private_key.to_string(),
             Some(String::new()),
             None,
             None,
             None,
         )
-        .unwrap();
+            .unwrap();
         assert_eq!(config.bitcoin_network, BitcoinNetwork::Bitcoin);
         assert_eq!(config.stacks_version, TransactionVersion::Mainnet);
-        assert_eq!(config.contract_name.to_string(), sbtc_contract_name);
-        assert_eq!(config.contract_address.to_string(), sbtc_contract_address);
+        assert_eq!(config.contract_name.to_string(), mining_contract_name);
+        assert_eq!(config.contract_address.to_string(), mining_contract_address);
         assert_eq!(config.stacks_private_key.to_hex(), stacks_private_key);
 
         // Test config with no signer_config_file
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
             Some(String::new()),
             Some(String::new()),
         )
-        .unwrap();
+            .unwrap();
         assert_eq!(config.bitcoin_network, BitcoinNetwork::Bitcoin);
         assert_eq!(config.stacks_version, TransactionVersion::Mainnet);
-        assert_eq!(config.contract_name.to_string(), sbtc_contract_name);
-        assert_eq!(config.contract_address.to_string(), sbtc_contract_address);
+        assert_eq!(config.contract_name.to_string(), mining_contract_name);
+        assert_eq!(config.contract_address.to_string(), mining_contract_address);
         assert_eq!(config.stacks_private_key.to_hex(), stacks_private_key);
 
         // Test config with no signer_config_file or http_relay_url
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             None,
@@ -288,7 +347,7 @@ transaction_fee = 2000
 
         // Test config with no signer_config_file or network_private_key
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -299,7 +358,7 @@ transaction_fee = 2000
 
         // Test config with no signer_config_file or frost_state_file
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -310,7 +369,7 @@ transaction_fee = 2000
 
         // Test config with invalid contract name
         let config = write_new_config(
-            format!("garbage.{sbtc_contract_name}"),
+            format!("garbage.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -321,7 +380,7 @@ transaction_fee = 2000
 
         // Test config with missing "."
         let config = write_new_config(
-            format!("{sbtc_contract_address}"),
+            format!("{mining_contract_address}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -332,7 +391,7 @@ transaction_fee = 2000
 
         // Test config with no contract name
         let config = write_new_config(
-            format!("{sbtc_contract_address}."),
+            format!("{mining_contract_address}."),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -343,7 +402,7 @@ transaction_fee = 2000
 
         // Test config with garbage contract name
         let config = write_new_config(
-            format!("{sbtc_contract_address}.12"),
+            format!("{mining_contract_address}.12"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -354,7 +413,7 @@ transaction_fee = 2000
 
         // Test config with no garbage contract address name
         let config = write_new_config(
-            format!("garbage.{sbtc_contract_name}"),
+            format!("garbage.{mining_contract_name}"),
             stacks_private_key.to_string(),
             None,
             Some(String::new()),
@@ -365,7 +424,7 @@ transaction_fee = 2000
 
         // Test config with an invalid private key
         let config = write_new_config(
-            format!("{sbtc_contract_address}.{sbtc_contract_name}"),
+            format!("{mining_contract_address}.{mining_contract_name}"),
             String::from("Garbage"),
             None,
             Some(String::new()),
@@ -420,10 +479,11 @@ transaction_fee = 2000
         assert_eq!(stacks_version, TransactionVersion::Mainnet);
         assert_eq!(bitcoin_network, BitcoinNetwork::Bitcoin);
     }
+
     #[test]
     fn parse_contract_test() {
         let mut config = RawConfig::default();
-        config.sbtc_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sbtc-alpha".to_string();
+        config.mining_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sbtc-alpha".to_string();
         let (parsed_contract_name, parsed_contract_address) = config.parse_contract().unwrap();
         assert_eq!(
             parsed_contract_address.to_string(),
@@ -432,21 +492,21 @@ transaction_fee = 2000
         assert_eq!(parsed_contract_name.to_string(), "sbtc-alpha".to_string());
 
         // Invalid contract
-        config.sbtc_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTEsbtc-alpha".to_string();
+        config.mining_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTEsbtc-alpha".to_string();
         assert!(matches!(
             config.parse_contract(),
             Err(Error::InvalidContract(_))
         ));
 
         // Invalid contract address
-        config.sbtc_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8E.sbtc-alpha".to_string();
+        config.mining_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8E.sbtc-alpha".to_string();
         assert!(matches!(
             config.parse_contract(),
             Err(Error::InvalidContract(_))
         ));
 
         // Invalid contract name
-        config.sbtc_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.12".to_string();
+        config.mining_contract = "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.12".to_string();
         assert!(matches!(
             config.parse_contract(),
             Err(Error::InvalidContract(_))

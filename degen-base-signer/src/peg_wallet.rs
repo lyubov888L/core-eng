@@ -58,6 +58,13 @@ pub trait BitcoinWallet {
         txouts: Vec<UTXO>,
     ) -> Result<(bitcoin_node::BitcoinTransaction, Vec<TxOut>), Error>;
 
+    // Builds an unsigned transaction using the provided utxos to cover the spend amount for the script
+    fn script_peg_out(
+        &self,
+        op: &PegOutRequestOp,
+        txouts: Vec<UTXO>,
+    ) -> Result<(bitcoin_node::BitcoinTransaction, Vec<TxOut>), Error>;
+
     /// Returns the BTC address for the wallet
     fn address(&self) -> &BitcoinAddress;
 
@@ -73,8 +80,8 @@ pub trait PegWallet {
 }
 
 pub struct WrapPegWallet {
-    pub(crate) bitcoin_wallet: BitcoinWalletStruct,
-    pub(crate) stacks_wallet: StacksWalletStruct,
+    pub bitcoin_wallet: BitcoinWalletStruct,
+    pub stacks_wallet: StacksWalletStruct,
 }
 
 impl PegWallet for WrapPegWallet {

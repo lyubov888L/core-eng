@@ -5,7 +5,9 @@ members = [
   "degen-base-coordinator",
   "degen-superior-coordinator",
   "degen-superior-signer",
-  "yarpc"]
+  "yarpc",
+  "test-utils"
+]
 
 [workspace.dependencies]
 anyhow = "1.0"

@@ -1,27 +1,72 @@
+use bdk::miniscript::psbt::SighashError;
+use bitcoin::blockdata::opcodes::all;
+use bitcoin::blockdata::script::Builder;
+use bitcoin::consensus::serialize;
+use bitcoin::hashes::Hash;
+use bitcoin::psbt::{PartiallySignedTransaction, Prevouts};
+use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use bitcoin::util::sighash::SighashCache;
+use bitcoin::util::{base58, taproot};
+use bitcoin::Txid;
+use bitcoin::{
+    EcdsaSighashType, KeyPair, Network, OutPoint, PrivateKey, PublicKey, SchnorrSighashType,
+    Script, TxOut, Witness, XOnlyPublicKey,
+};
+use blockstack_lib::burnchains::bitcoin::address::{BitcoinAddress, SegwitBitcoinAddress};
+use blockstack_lib::burnchains::bitcoin::{
+    BitcoinNetworkType, BitcoinTransaction, BitcoinTxOutput,
+};
+use blockstack_lib::burnchains::{
+    Address, BurnchainBlockHeader, BurnchainTransaction, PrivateKey as PrivateKeyTrait,
+};
+use blockstack_lib::chainstate::burn::operations::PegOutRequestOp;
+use blockstack_lib::chainstate::burn::Opcodes;
+use blockstack_lib::chainstate::stacks::address::PoxAddress;
+use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
+use blockstack_lib::types::chainstate::{BurnchainHeaderHash, StacksAddress};
+use blockstack_lib::util::hash::{Hash160, Sha256Sum};
+use blockstack_lib::vm::ContractName;
 use hashbrown::{HashMap, HashSet};
 use p256k1::{
     ecdsa,
     point::{Compressed, Point},
     scalar::Scalar,
 };
+use rand::{random, Rng};
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::str::FromStr;
+use std::thread::sleep;
+use std::time::Duration;
+use bdk::miniscript::ToPublicKey;
+use itertools::Itertools;
 use tracing::{debug, info, warn};
-pub use wsts;
+use url::Url;
 use wsts::{
     common::{PolyCommitment, PublicNonce, SignatureShare},
     traits::Signer as SignerTrait,
     v1,
 };
 
+use crate::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode, UTXO};
+use crate::bitcoin_scripting::{
+    create_refund_tx, create_script_refund, create_script_unspendable, create_tree,
+    create_tx_from_user_to_script, get_current_block_height, get_good_utxo_from_list,
+    sign_tx_script_refund, sign_tx_user_to_script,
+};
+use crate::bitcoin_wallet::BitcoinWallet;
+use crate::peg_wallet::BitcoinWallet as BitcoinWalletTrait;
+use crate::stacks_node::client::NodeClient;
+use crate::stacks_wallet::StacksWallet;
 use crate::{
     config::PublicKeys,
     signer::Signer as FrostSigner,
     state_machine::{Error as StateMachineError, StateMachine, States},
     util::{decrypt, encrypt, make_shared_secret},
 };
+use crate::signing_round::Error::UTXOAmount;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -37,6 +82,18 @@ pub enum Error {
     InvalidSignatureShare,
     #[error("State Machine Error: {0}")]
     StateMachineError(#[from] StateMachineError),
+    #[error("Error occured during signing: {0}")]
+    SigningError(#[from] SighashError),
+    #[error("The amount you're sending is smaller than the fee")]
+    FeeError,
+    #[error("UTXO amount too low")]
+    UTXOAmount,
+}
+
+#[derive(thiserror::Error, Debug, Clone, Serialize, Deserialize)]
+pub enum UtxoError {
+    #[error("Invalid UTXO.")]
+    InvalidUTXO,
 }
 
 pub trait Signable {
@@ -84,10 +141,29 @@ pub struct SigningRound {
     pub public_nonces: Vec<PublicNonce>,
     pub network_private_key: Scalar,
     pub public_keys: PublicKeys,
+    // TODO: should be encrypted, i guess?
+    pub contract_name: ContractName,
+    pub contract_address: StacksAddress,
+    pub aggregate_public_key: Point,
+    pub stacks_private_key: StacksPrivateKey,
+    pub stacks_address: StacksAddress,
+    pub stacks_node_rpc_url: Url,
+    pub local_stacks_node: NodeClient,
+    pub stacks_wallet: StacksWallet,
+    pub stacks_version: TransactionVersion,
+    pub bitcoin_private_key: SecretKey,
+    pub bitcoin_xonly_public_key: XOnlyPublicKey,
+    pub bitcoin_node_rpc_url: Url,
+    pub local_bitcoin_node: LocalhostBitcoinNode,
+    pub bitcoin_wallet: BitcoinWallet,
+    pub transaction_fee: u64,
+    pub bitcoin_network: Network,
+
+    pub script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
 }
 
 pub struct Signer {
-    pub frost_signer: wsts::v1::Signer,
+    pub frost_signer: v1::Signer,
     pub signer_id: u32,
 }
 
@@ -112,6 +188,9 @@ impl StateMachine for SigningRound {
             States::DkgPrivateGather => prev_state == &States::DkgPrivateDistribute,
             States::SignGather => prev_state == &States::Idle,
             States::Signed => prev_state == &States::SignGather,
+            States::DegensScriptDistribute => prev_state == &States::Idle,
+            States::DegensScriptGather => prev_state == &States::DegensScriptDistribute,
+            // TODO degens: add states for scripts
         };
         if accepted {
             info!("state change from {:?} to {:?}", prev_state, state);
@@ -143,6 +222,9 @@ pub enum MessageTypes {
     NonceResponse(NonceResponse),
     SignShareRequest(SignatureShareRequest),
     SignShareResponse(SignatureShareResponse),
+    DegensCreateScriptsRequest(DegensScriptRequest),
+    DegensCreateScriptsResponse(DegensScriptResponse),
+    DegensSpendScripts(DegensSpendScript),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -307,6 +389,75 @@ impl Signable for SignatureShareResponse {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct DegensScriptRequest {
+    pub dkg_id: u64,
+    pub aggregate_public_key: Point,
+}
+
+impl Signable for DegensScriptRequest {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_CREATE_SCRIPT_REQUEST".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.aggregate_public_key.to_string().as_bytes());
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct DegensScriptResponse {
+    pub signer_id: u32,
+    pub stacks_address: StacksAddress,
+    pub utxo: Result<UTXO, UtxoError>,
+}
+
+impl Signable for DegensScriptResponse {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_CREATE_SCRIPT_RESPONSE".as_bytes());
+        hasher.update(self.signer_id.to_be_bytes());
+
+        hasher.update(self.stacks_address.bytes.as_bytes());
+        hasher.update(self.stacks_address.version.to_be_bytes());
+
+        match &self.utxo {
+            Ok(utxo) => {
+                hasher.update(utxo.address.as_bytes());
+                hasher.update(utxo.txid.as_bytes());
+                hasher.update(utxo.amount.to_be_bytes());
+                hasher.update(utxo.desc.as_bytes());
+                hasher.update(utxo.confirmations.to_be_bytes());
+                hasher.update(utxo.label.as_bytes());
+                hasher.update(utxo.redeemScript.as_bytes());
+                hasher.update(utxo.reused.to_string().as_bytes());
+                hasher.update(utxo.safe.to_string().as_bytes());
+                hasher.update(utxo.scriptPubKey.as_bytes());
+                hasher.update(utxo.solvable.to_string().as_bytes());
+                hasher.update(utxo.spendable.to_string().as_bytes());
+                hasher.update(utxo.vout.to_be_bytes());
+                hasher.update(utxo.witnessScript.as_bytes());
+            }
+            Err(_) => {
+                hasher.update("No good UTXO in the list.".as_bytes());
+            }
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct DegensSpendScript {
+    pub dkg_id: u64,
+    pub addresses: Vec<String>, // TODO degens: update to address type/alias
+}
+
+impl Signable for DegensSpendScript {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_SPEND_SCRIPT".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        for address in &self.addresses {
+            hasher.update(address.as_bytes());
+        }
+    }
+}
+
 impl SigningRound {
     pub fn new(
         threshold: u32,
@@ -340,6 +491,42 @@ impl SigningRound {
             public_nonces: vec![],
             network_private_key,
             public_keys,
+            contract_name: ContractName::from(""),
+            contract_address: StacksAddress::new(26, Hash160([0; 20])),
+            aggregate_public_key: Point::new(),
+            stacks_private_key: StacksPrivateKey::new(),
+            stacks_address: StacksAddress::new(26, Hash160([0; 20])),
+            stacks_node_rpc_url: Url::from_str("").unwrap(),
+            local_stacks_node: NodeClient::new(
+                Url::from_str("").unwrap(),
+                ContractName::from(""),
+                StacksAddress::new(26, Hash160([0; 20])),
+            ),
+            stacks_wallet: StacksWallet::new(
+                ContractName::from(""),
+                StacksAddress::from_string("").unwrap(),
+                StacksPrivateKey::new(),
+                StacksAddress::new(26, Hash160([0; 20])),
+                TransactionVersion::Testnet,
+                0,
+            ),
+            stacks_version: TransactionVersion::Testnet,
+            bitcoin_private_key: SecretKey::new(&mut rng),
+            bitcoin_xonly_public_key: SecretKey::new(&mut rng)
+                .x_only_public_key(&Secp256k1::new())
+                .0,
+            bitcoin_node_rpc_url: Url::from_str("").unwrap(),
+            local_bitcoin_node: LocalhostBitcoinNode::new(Url::from_str("").unwrap()),
+            bitcoin_wallet: BitcoinWallet::new(
+                XOnlyPublicKey::from_str(
+                    "cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115",
+                )
+                    .unwrap(),
+                Network::Regtest,
+            ),
+            transaction_fee: 0,
+            bitcoin_network: Network::Regtest,
+            script_addresses: BTreeMap::new(),
         }
     }
 
@@ -366,6 +553,10 @@ impl SigningRound {
                 self.sign_share_request(sign_share_request)
             }
             MessageTypes::NonceRequest(nonce_request) => self.nonce_request(nonce_request),
+            MessageTypes::DegensCreateScriptsRequest(degens_create_script) => {
+                self.degen_create_script(degens_create_script)
+            }
+
             _ => Ok(vec![]), // TODO
         };
 
@@ -544,6 +735,7 @@ impl SigningRound {
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut msgs = vec![];
 
+        // TODO: degens - verify output from tx from msgs to be the real 2 pox addresses
         let signer_ids = sign_request
             .nonce_responses
             .iter()
@@ -704,11 +896,248 @@ impl SigningRound {
         );
         Ok(vec![])
     }
+
+    fn degen_create_script(
+        &mut self,
+        degens_create_script: DegensScriptRequest,
+    ) -> Result<Vec<MessageTypes>, Error> {
+        // let current_block_height = get_current_block_height(&self.local_bitcoin_node);
+        let secp = Secp256k1::new();
+        let keypair = KeyPair::from_secret_key(&secp, &self.bitcoin_private_key);
+
+        let aggregate_compressed = degens_create_script.aggregate_public_key.compress();
+        let aggregate_x_only = PublicKey::from_slice(aggregate_compressed.as_bytes()).unwrap().to_x_only_pubkey();
+
+        let script_1 = create_script_refund(&self.bitcoin_xonly_public_key, 100);
+        let script_2 = create_script_unspendable();
+
+        let (tap_info, script_address) = create_tree(&secp, aggregate_x_only, &script_1, &script_2);
+
+        let amount_to_script: u64 = 2000;
+        let fee: u64 = 1000;
+        let transactions_to_script: u64 = 1;
+
+        for i in 1..=transactions_to_script {
+            let mut unspent_list_signer = self
+                .local_bitcoin_node
+                .list_unspent(&self.bitcoin_wallet.address())
+                .expect("Failed to get unspent list for signer.");
+
+            let mut valid_utxos = vec![];
+            let mut total_amount: u64 = 0;
+
+            unspent_list_signer.sort_by(|a, b| b.confirmations.partial_cmp(&a.confirmations).unwrap());
+            for utxo in unspent_list_signer.clone() {
+                if total_amount < amount_to_script {
+                    total_amount += utxo.amount;
+                    valid_utxos.push(utxo);
+                }
+            }
+
+            if total_amount < amount_to_script {
+                valid_utxos = vec![];
+                total_amount = 0;
+            }
+
+            if valid_utxos == vec![] {
+                return Err(UTXOAmount);
+            }
+
+            let mut unspent_list_txout: Vec<TxOut> = vec![];
+            valid_utxos.iter().for_each(|utxo| {
+                unspent_list_txout.push(TxOut {
+                    value: utxo.amount,
+                    script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+                });
+            });
+
+            let prevouts_signer = Prevouts::One(0, unspent_list_txout[0].clone());
+
+            let (user_to_script_unsigned, amount_left) = create_tx_from_user_to_script(
+                &valid_utxos,
+                &self.bitcoin_wallet.address(),
+                &script_address,
+                amount_to_script,
+                fee,
+                0,
+            );
+
+            let user_to_script_signed =
+                sign_tx_user_to_script(&secp, &user_to_script_unsigned, &prevouts_signer, &keypair);
+            self.local_bitcoin_node
+                .broadcast_transaction(&user_to_script_signed)
+                .unwrap();
+        }
+
+        sleep(Duration::from_secs(self.signer.signer_id as u64));
+        self.local_bitcoin_node
+            .load_wallet(&script_address)
+            .unwrap();
+
+        let utxos = self
+            .local_bitcoin_node
+            .list_unspent(&script_address)
+            .expect("No utxos.");
+
+        let refund_tx = create_refund_tx(&utxos, self.bitcoin_wallet.address(), fee).unwrap();
+
+        let mut txout_vec: Vec<TxOut> = vec![];
+        utxos.iter().for_each(|utxo| {
+            txout_vec.push(TxOut {
+                value: utxo.amount,
+                script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+            });
+        });
+
+        let signed_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, &tap_info);
+
+        let signed_txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx).unwrap();
+        info!("{signed_txid:#?}");
+
+        let good_utxo = get_good_utxo_from_list(utxos, amount_to_script);
+
+        let mut msgs = vec![];
+
+        let response = DegensScriptResponse {
+            signer_id: self.signer.signer_id,
+            stacks_address: self.stacks_address,
+            utxo: good_utxo,
+        };
+
+        let response = MessageTypes::DegensCreateScriptsResponse(response);
+        msgs.push(response);
+
+        Ok(msgs)
+
+        // let unspent_list = self.local_bitcoin_node.list_unspent(&script_address).unwrap();
+        // info!("script_address: {script_address:#?}");
+        // info!("unspent list: {unspent_list:#?}");
+        //
+        // let amount = 1000;
+        //
+        // let pox_addr_1 = bitcoin::Address::from_str("BCRT1P8M4KHK8A06CUCAWGPPQ3GDKEXTH7MZF6DGW54KZ67TKFQ3RCUU5QNKHUDG").unwrap();
+        // let pox_addr_2 = bitcoin::Address::from_str("BCRT1P6HNYZU0USW758H2F04GMWDGYWXAK9PAMA9S7AQ7NZEMXVGG0JTHSN9DNZN").unwrap();
+        // let addresses_list = vec![pox_addr_1, pox_addr_2, script_address];
+        //
+        // let script_unsigned_tx = create_tx_from_user_to_script(&unspent_list, &addresses_list, amount, 0);
+        //
+        // info!("{script_unsigned_tx:#?}");
+
+        // let script_txid = self.local_bitcoin_node.broadcast_transaction(&script_signed_tx);
+
+        // info!("{script_txid:#?}");
+
+        // // create new op using from_tx()
+        // // create tx with recipient script address and block header
+        // // TODO: degens change amount to readonly sc call
+        // let amount: u64 = 1000;
+
+        // let script_address_pubkey = &script_address.script_pubkey();
+        // let script_address_bytes = script_address_pubkey.as_bytes();
+        //
+        // let mut script_pubkey = vec![81, 32]; // OP_1 OP_PUSHBYTES_32
+        // script_pubkey.extend_from_slice(&script_address_bytes);
+        //
+        // let mut msg = amount.to_be_bytes().to_vec();
+        // msg.extend_from_slice(&script_pubkey);
+        //
+        // let signature = self.stacks_private_key
+        //     .sign(Sha256Sum::from_data(&msg).as_bytes())
+        //     .expect("Failed to sign amount and recipient fields.");
+        //
+        // let mut data = vec![];
+        // data.extend_from_slice(&amount.to_be_bytes());
+        // data.extend_from_slice(signature.as_bytes());
+        //
+        // let output_script_address = BitcoinAddress::from_scriptpubkey(
+        //     BitcoinNetworkType::Regtest,
+        //     script_address_bytes
+        // ).unwrap();
+        //
+        // let output = BitcoinTxOutput {
+        //     address: output_script_address,
+        //     units: amount,
+        // };
+        //
+        // let mut rng = rand::thread_rng();
+        //
+        // let peg_wallet_address = rng.gen::<[u8; 32]>();
+        // let output2 = BitcoinTxOutput {
+        //     units: amount,
+        //     address: BitcoinAddress::Segwit(SegwitBitcoinAddress::P2TR(true, peg_wallet_address)),
+        // };
+        //
+        // let header = BurnchainBlockHeader {
+        //     block_height: 0,
+        //     block_hash: [0; 32].into(),
+        //     parent_block_hash: [0; 32].into(),
+        //     num_txs: 0,
+        //     timestamp: 0,
+        // };
+        //
+        // let burnchain_tx: BurnchainTransaction = BurnchainTransaction::Bitcoin(BitcoinTransaction {
+        //     txid: Txid([0; 32]),
+        //     vtxindex: 0,
+        //     opcode: Opcodes::PegOutRequest as u8,
+        //     data,
+        //     data_amt: 0,
+        //     inputs: vec![],
+        //     outputs: vec![output, output2],
+        // });
+        //
+        // let op = PegOutRequestOp::from_tx(&header, &burnchain_tx).expect("Failed to construct peg-out request op");
+
+        // let (mut tx, prevouts_vec) = self.bitcoin_wallet.script_peg_out(&op, unspent_list).expect("Failed to construct transaction");
+        //
+        // // TODO: is the tx signed? how to sign it if not?
+        // info!("unsigned_tx: {:#?}", tx);
+        //
+        // // TODO: try here same format as on vs-code
+        //
+        // let prevout = Prevouts::One(
+        //     0,
+        //     prevouts_vec[0].clone(),
+        // );
+        // let sig = sign_key_tx(&secp, &tx, &prevout, &keypair, &tap_info);
+        // tx.input[0].witness.push(sig);
+        //
+        //
+        // // for index in 0..tx.input.len() {
+        // //     let prevout = Prevouts::One(
+        // //         0,
+        // //         prevouts_vec[index].clone(),
+        // //     );
+        // //     let sig = sign_key_tx(&secp, &tx, &prevout, &keypair, &tap_info);
+        // //     tx.input[index].witness.push(sig);
+        // // }
+        //
+        // info!("signed_tx: {:#?}", tx);
+        //
+        // // TODO: broadcast transaction (see how the tx was signed, if the current one isn't)
+        //
+        // let script_txid = self.local_bitcoin_node.broadcast_transaction(&tx);
+        // info!("broadcast_txid: {:#?}", script_txid);
+
+        // TODO: create another pegout with input the script address and output 2 user addresses in bitcoin_wallet
+
+        // TODO: send the message that the script was created and money sent to it
+        // TODO: the message contains signer's stacks address and script address (to keep track of the people who sent money), make a list for coordinator
+
+        // send funds to script
+        // my private key to spend through it
+        // my address
+
+        // retrieve script address/public key
+
+        // how do we want to return the addresses? change type? all functions have this return type
+        // Ok(vec![])
+    }
 }
 
 impl From<&FrostSigner> for SigningRound {
     fn from(signer: &FrostSigner) -> Self {
         let signer_id = signer.signer_id;
+        let signer_private_key = signer.config.stacks_private_key;
         assert!(signer_id > 0 && signer_id <= signer.config.total_signers);
         let key_ids = signer.config.signer_key_ids[&signer_id]
             .iter()
@@ -746,6 +1175,23 @@ impl From<&FrostSigner> for SigningRound {
             public_nonces: vec![],
             network_private_key,
             public_keys,
+            contract_name: signer.config.contract_name.clone(),
+            contract_address: signer.config.contract_address,
+            aggregate_public_key: Point::new(),
+            stacks_private_key: signer.config.stacks_private_key,
+            stacks_address: signer.config.stacks_address,
+            stacks_node_rpc_url: signer.config.stacks_node_rpc_url.clone(),
+            local_stacks_node: signer.config.local_stacks_node.clone(),
+            stacks_wallet: signer.config.stacks_wallet.clone(),
+            stacks_version: signer.config.stacks_version,
+            bitcoin_private_key: signer.config.bitcoin_private_key,
+            bitcoin_xonly_public_key: signer.config.bitcoin_xonly_public_key,
+            bitcoin_node_rpc_url: signer.config.bitcoin_node_rpc_url.clone(),
+            local_bitcoin_node: signer.config.local_bitcoin_node.clone(),
+            bitcoin_wallet: signer.config.bitcoin_wallet.clone(),
+            transaction_fee: signer.config.transaction_fee,
+            bitcoin_network: signer.config.bitcoin_network,
+            script_addresses: BTreeMap::new(),
         }
     }
 }

@@ -41,6 +41,8 @@ fn main() {
                             if let Err(e) = coordinator.run_dkg_round() {
                                 warn!("An error occurred during DKG round: {}", e);
                             };
+                            // TODO: degens - move separately
+                            coordinator.run_create_script();
                             info!("Running Signing Round");
                             let (signature, schnorr_proof) =
                                 match coordinator.sign_message("Hello, world!") {

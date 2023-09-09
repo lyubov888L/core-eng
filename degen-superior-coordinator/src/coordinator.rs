@@ -1,11 +1,7 @@
-use bitcoin::{
-    psbt::Prevouts,
-    util::{
-        base58,
-        sighash::{Error as SighashError, SighashCache},
-    },
-    SchnorrSighashType, XOnlyPublicKey,
-};
+use bitcoin::{psbt::Prevouts, util::{
+    base58,
+    sighash::{Error as SighashError, SighashCache},
+}, SchnorrSighashType, XOnlyPublicKey, Address, Txid, PackedLockTime, TxIn, Script, Sequence, Witness, TxOut, OutPoint};
 use blockstack_lib::{types::chainstate::StacksAddress, util::secp256k1::Secp256k1PublicKey};
 use degen_base_coordinator::{
     coordinator::Error as FrostCoordinatorError, create_coordinator, create_coordinator_from_path,
@@ -13,9 +9,10 @@ use degen_base_coordinator::{
 use degen_base_signer::{
     config::Config as SignerConfig,
     net::{Error as HttpNetError, HttpNetListen},
-    signing_round::DkgPublicShare,
+    signing_round::{DkgPublicShare, UtxoError},
 };
 use std::{
+    str::FromStr,
     collections::BTreeMap,
     fs::File,
     path::{Path, PathBuf},
@@ -26,11 +23,12 @@ use std::{
 use tracing::{debug, info, warn};
 use wsts::{common::Signature, field::Element, taproot::SchnorrProof, Point, Scalar};
 
-use crate::bitcoin_wallet::BitcoinWallet;
-use crate::stacks_node::{self, Error as StacksNodeError};
-use crate::stacks_wallet::StacksWallet;
-use crate::{config::Config, stacks_node::client::BroadcastError};
-use crate::{
+use degen_base_signer::bitcoin_wallet::BitcoinWallet;
+use degen_base_signer::stacks_node::{self, Error as StacksNodeError};
+use degen_base_signer::stacks_wallet::StacksWallet;
+use crate::{config::Config};
+use degen_base_signer::stacks_node::client::BroadcastError;
+use degen_base_signer::{
     peg_wallet::{
         BitcoinWallet as BitcoinWalletTrait, Error as PegWalletError, PegWallet,
         StacksWallet as StacksWalletTrait, WrapPegWallet,
@@ -39,13 +37,13 @@ use crate::{
 };
 
 // Traits in scope
-use crate::bitcoin_node::{
-    BitcoinNode, BitcoinTransaction, Error as BitcoinNodeError, LocalhostBitcoinNode,
+use degen_base_signer::bitcoin_node::{
+    BitcoinNode, BitcoinTransaction, Error as BitcoinNodeError, LocalhostBitcoinNode, UTXO
 };
-use crate::peg_queue::{
+use degen_base_signer::peg_queue::{
     Error as PegQueueError, PegQueue, SbtcOp, SqlitePegQueue, SqlitePegQueueError,
 };
-use crate::stacks_node::{client::NodeClient, StacksNode};
+use degen_base_signer::stacks_node::{client::NodeClient, StacksNode};
 
 type FrostCoordinator = degen_base_coordinator::coordinator::Coordinator<HttpNetListen>;
 
@@ -251,6 +249,49 @@ trait CoordinatorHelpers: Coordinator {
             }
         }
     }
+
+    fn sign_tx_from_script(
+        &mut self,
+        utxos: Vec<UTXO>,
+        // op: &stacks_node::PegOutRequestOp,
+        tx: BitcoinTransaction,
+    ) -> Result<BitcoinTransaction> {
+        // Build unsigned fulfilled peg out transaction
+        // let (mut tx, prevouts) = self.fee_wallet().bitcoin().fulfill_peg_out(op, utxos)?;
+        let mut prevouts: Vec<TxOut> = vec![];
+        for utxo in utxos {
+            prevouts.push(TxOut {
+                value: utxo.amount,
+                script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+            });
+        };
+        let mut signed_tx = tx.clone();
+        let sighash_tx = tx.clone();
+        let mut sighash_cache = SighashCache::new(&sighash_tx);
+        // Sign the transaction
+        for index in 0..sighash_tx.input.len() {
+            let taproot_sighash = sighash_cache
+                .taproot_key_spend_signature_hash(
+                    index,
+                    &Prevouts::All(&prevouts),
+                    SchnorrSighashType::Default,
+                )
+                .map_err(Error::SigningError)?;
+            let (_frost_sig, schnorr_proof) = self
+                .frost_coordinator_mut()
+                .sign_message(&taproot_sighash.as_hash())?;
+            debug!(
+                "Fulfill Tx {:?} SchnorrProof ({},{})",
+                &tx, schnorr_proof.r, schnorr_proof.s
+            );
+            let finalized = schnorr_proof.to_bytes();
+            let finalized_b58 = base58::encode_slice(&finalized);
+            debug!("CALC SIG ({}) {}", finalized.len(), finalized_b58);
+            signed_tx.input[index].witness.push(finalized);
+        }
+        //Return the signed transaction
+        Ok(signed_tx)
+    }
 }
 
 impl<T: Coordinator> CoordinatorHelpers for T {}
@@ -277,6 +318,86 @@ impl StacksCoordinator {
 
     pub fn sign_message(&mut self, message: &str) -> Result<(Signature, SchnorrProof)> {
         Ok(self.frost_coordinator.sign_message(message.as_bytes())?)
+    }
+
+    pub fn run_create_script(&mut self) -> Result<u64> {
+        let (response_utxos, response_stacks_addresses) = self.frost_coordinator.run_create_scripts_generation();
+        // check if signers sent correct details to coordinator
+        let mut utxos= vec![];
+        let mut bad_actors = vec![];
+        let mut good_actors = vec![];
+        let mut all_miners: Vec<StacksAddress> = vec![];
+        for position in 0..response_utxos.len() {
+            if response_utxos[position].clone().unwrap_or(UTXO::default()) == UTXO::default() {
+                bad_actors.push(response_stacks_addresses[position]);
+            }
+            else {
+                good_actors.push(response_stacks_addresses[position]);
+                utxos.push(response_utxos[position].clone().unwrap())
+            }
+        }
+        for position in 0..bad_actors.len() {
+            if good_actors.contains(&bad_actors[position]) {
+                bad_actors.remove(position);
+                all_miners.retain(|actor| actor != &bad_actors[position]);
+            }
+        }
+        for good_actor in good_actors {
+            all_miners.retain(|actor| actor != &good_actor);
+        }
+        let tx = create_tx_from_txids(
+            vec![
+                &Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
+                &Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
+            ],
+            &utxos,
+            300,
+        );
+        let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
+        info!("{:#?}", signed_tx);
+        let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
+        info!("{txid:#?}");
+        Ok(0)
+    }
+}
+
+fn create_tx_from_txids(
+    user_addresses: Vec<&Address>,
+    utxos: &Vec<UTXO>,
+    fee: u64,
+) -> BitcoinTransaction {
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    let mut total_amount: u64 = 0;
+    for utxo in utxos {
+        let outpoint = OutPoint::new(
+            Txid::from_str(utxo.txid.as_str()).unwrap(),
+            utxo.vout.clone()
+        );
+        total_amount = total_amount + utxo.amount;
+        inputs.push(
+            TxIn {
+                previous_output: outpoint,
+                script_sig: Script::new(),
+                sequence: Sequence(0x8030FFFF),
+                witness: Witness::default(),
+            }
+        );
+    }
+    let amount_to_each_user = (total_amount - fee) / (user_addresses.len() as u64);
+    for address in user_addresses {
+        outputs.push(
+            TxOut {
+                value: amount_to_each_user,
+                script_pubkey: address.script_pubkey(),
+            }
+        )
+    }
+    BitcoinTransaction {
+        version: 2,
+        lock_time: PackedLockTime(100),
+        input: inputs,
+        output: outputs,
     }
 }
 
@@ -341,13 +462,30 @@ fn create_frost_coordinator_from_contract(
     )
     .map_err(|_| Error::ConfigError("Invalid network_private_key.".to_string()))?;
     let http_relay_url = config.http_relay_url.clone().unwrap_or(String::new());
+    let miner_status = stacks_node.get_status(&config.stacks_address).unwrap();
     create_coordinator(&SignerConfig::new(
+        config.contract_name.clone(),
+        config.contract_address.clone(),
+        config.stacks_private_key.clone(),
+        config.stacks_address.clone(),
+        config.stacks_node_rpc_url.clone(),
+        config.local_stacks_node.clone(),
+        config.stacks_wallet.clone(),
+        config.stacks_version.clone(),
+        config.bitcoin_private_key.clone(),
+        config.bitcoin_xpub.clone(),
+        config.bitcoin_node_rpc_url.clone(),
+        config.local_bitcoin_node.clone(),
+        config.bitcoin_wallet.clone(),
+        config.transaction_fee.clone(),
+        config.bitcoin_network.clone(),
         keys_threshold.try_into().unwrap(),
         coordinator_public_key,
         public_keys,
         signer_key_ids,
         network_private_key,
         http_relay_url,
+        miner_status,
     ))
     .map_err(|e| Error::ConfigError(e.to_string()))
 }
@@ -549,7 +687,7 @@ impl Coordinator for StacksCoordinator {
 mod tests {
     use crate::config::{Config, RawConfig};
     use crate::coordinator::{CoordinatorHelpers, StacksCoordinator};
-    use crate::stacks_node::PegOutRequestOp;
+    use degen_base_signer::stacks_node::PegOutRequestOp;
     use bitcoin::consensus::Encodable;
     use blockstack_lib::burnchains::Txid;
     use blockstack_lib::chainstate::stacks::address::{PoxAddress, PoxAddressType20};

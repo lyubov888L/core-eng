@@ -42,7 +42,7 @@ impl Signer {
         let network_private_key = self.config.network_private_key;
         let mut round = SigningRound::from(self);
         loop {
-            // Retreive a message from coordinator
+            // Retrieve a message from coordinator
             let inbound = rx.recv()?; // blocking
             let outbounds = round.process(inbound.msg)?;
             for out in outbounds {
@@ -80,6 +80,18 @@ impl Signer {
                         MessageTypes::SignShareResponse(msg) => msg
                             .sign(&network_private_key)
                             .expect("failed to sign SignShareResponse")
+                            .to_vec(),
+                        MessageTypes::DegensCreateScriptsRequest(msg) => msg
+                            .sign(&network_private_key)
+                            .expect("failed to sign DegensCreateScriptsRequest")
+                            .to_vec(),
+                        MessageTypes::DegensCreateScriptsResponse(msg) => msg
+                            .sign(&network_private_key)
+                            .expect("failed to sign DegensCreateScriptsResponse")
+                            .to_vec(),
+                        MessageTypes::DegensSpendScripts(msg) => msg
+                            .sign(&network_private_key)
+                            .expect("failed to sign DegensSpendScripts")
                             .to_vec(),
                     },
                 };
@@ -242,6 +254,24 @@ fn verify_msg(
                     "Received a SignShareResponse message with an unknown id: {}",
                     msg.signer_id
                 );
+                return false;
+            }
+        }
+        MessageTypes::DegensCreateScriptsRequest(msg) => {
+            if !msg.verify(&m.sig, coordinator_public_key) {
+                warn!("Received a DegensCreateScriptsRequest message with an invalid signature.");
+                return false;
+            }
+        }
+        MessageTypes::DegensCreateScriptsResponse(msg) => {
+            if !msg.verify(&m.sig, coordinator_public_key) {
+                warn!("Received a DegensCreateScriptsResponse message with an invalid signature.");
+                return false;
+            }
+        }
+        MessageTypes::DegensSpendScripts(msg) => {
+            if !msg.verify(&m.sig, coordinator_public_key) {
+                warn!("Received a DegensSpendScripts message with an invalid signature.");
                 return false;
             }
         }

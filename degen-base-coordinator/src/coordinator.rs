@@ -1,6 +1,10 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::time::Duration;
+use bitcoin::{Address, Txid};
+use blockstack_lib::burnchains::bitcoin::address::BitcoinAddress;
+use blockstack_lib::types::chainstate::StacksAddress;
+use degen_base_signer::signing_round::UtxoError;
 
 use degen_base_signer::config::{Config, Error as ConfigError};
 use degen_base_signer::{
@@ -20,6 +24,8 @@ use wsts::{
     taproot::{Error as TaprootError, SchnorrProof},
     v1, Point, Scalar,
 };
+use degen_base_signer::bitcoin_node::UTXO;
+use degen_base_signer::signing_round::DegensScriptRequest;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -47,6 +53,8 @@ pub enum Command {
     Sign { msg: Vec<u8> },
     DkgSign { msg: Vec<u8> },
     GetAggregatePublicKey,
+    CreateScripts,
+    SpendScripts, // TODO degens: has to sign the msg as in Sign and DkgSign
 }
 
 pub struct Coordinator<Network: NetListen> {
@@ -65,6 +73,8 @@ pub struct Coordinator<Network: NetListen> {
     aggregate_public_key: Point,
     network_private_key: Scalar,
     public_key: PublicKey,
+    // from user public key to script bitcoin address
+    script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
 }
 
 impl<Network: NetListen> Coordinator<Network> {
@@ -85,6 +95,7 @@ impl<Network: NetListen> Coordinator<Network> {
             signature_shares: Default::default(),
             network_private_key: config.network_private_key,
             public_key: config.coordinator_public_key,
+            script_addresses: Default::default(),
         })
     }
 
@@ -134,6 +145,16 @@ where
                 info!("aggregate public key {}", key);
                 Ok(())
             }
+            Command::CreateScripts => {
+                info!("create scripts and fund them by signers");
+                self.run_create_scripts_generation();
+                Ok(())
+            }
+            Command::SpendScripts => {
+                info!("spend scripts");
+                // self.
+                Ok(())
+            }
         }
     }
 
@@ -145,6 +166,38 @@ where
         self.start_private_shares()?;
         self.wait_for_dkg_end()?;
         Ok(public_key)
+    }
+
+    fn start_scripts(&mut self) -> Result<(), Error> {
+        let create_script = DegensScriptRequest {
+            dkg_id: self.current_dkg_id,
+            aggregate_public_key: self.get_aggregate_public_key().unwrap_or(Point::default()),
+        };
+        let create_scripts_message = Message {
+            sig: create_script.sign(&self.network_private_key).expect(""),
+            msg: MessageTypes::DegensCreateScriptsRequest(create_script),
+        };
+        self.network.send_message(create_scripts_message)?;
+        Ok(())
+    }
+    fn wait_for_create_scripts(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>) {
+        let mut ids_to_await: HashSet<u32> = (1..=self.total_signers).collect();
+        let (mut utxo, mut stacks_address) = (vec![], vec![]);
+        while !ids_to_await.is_empty() {
+            if let MessageTypes::DegensCreateScriptsResponse(response) = self.wait_for_next_message().unwrap().msg {
+                ids_to_await.remove(&response.signer_id);
+                utxo.push(response.utxo);
+                stacks_address.push(response.stacks_address);
+            }
+        }
+        (utxo, stacks_address)
+    }
+    pub fn run_create_scripts_generation(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>) {
+        // things to be done by coordinator
+        info!("Starting to create scripts");
+        self.start_scripts().unwrap();
+        let (utxo, stacks_address) = self.wait_for_create_scripts();
+        (utxo, stacks_address)
     }
 
     fn start_public_shares(&mut self) -> Result<(), Error> {
@@ -486,6 +539,7 @@ where
 mod test {
     use super::*;
     use crate::DEVNET_COORDINATOR_ID;
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
 
     use degen_base_signer::{
         config::{Config, PublicKeys, SignerKeyIds},
@@ -500,6 +554,14 @@ mod test {
     use relay_server::Server as RelayServer;
     use std::{env, thread};
     use test_utils::parse_env;
+    use std::str::FromStr;
+    use bitcoin::{KeyPair, Network, PrivateKey, XOnlyPublicKey};
+    use blockstack_lib::address::AddressHashMode;
+    use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
+    use blockstack_lib::types::chainstate::{StacksAddress, StacksPublicKey};
+    use serde::Deserialize;
+    use degen_base_signer::util_versioning::address_version;
+    use url::Url;
 
     fn create_signer_key_ids(signer_id: u32, keys_per_signer: u32) -> Vec<u32> {
         (0..keys_per_signer)
@@ -599,6 +661,41 @@ mod test {
         schnorr_proof.verify(&public_key.x(), &msg);
     }
 
+    #[derive(Clone, Deserialize, Default, Debug)]
+    #[serde(rename_all = "lowercase")]
+    pub enum NetworkVersion {
+        Mainnet,
+        Testnet,
+        #[default]
+        Regtest,
+    }
+    fn parse_version(network: NetworkVersion) -> (TransactionVersion, bitcoin::Network) {
+        // Determine what network we are running on
+        match network {
+            NetworkVersion::Mainnet => (TransactionVersion::Mainnet, Network::Bitcoin),
+            NetworkVersion::Testnet => (TransactionVersion::Testnet, Network::Testnet),
+            NetworkVersion::Regtest => (TransactionVersion::Testnet, Network::Regtest),
+        }
+    }
+    fn parse_stacks_private_key(stacks_private_key: String, network: NetworkVersion) -> Result<(StacksPrivateKey, StacksAddress), Error> {
+        let sender_key = StacksPrivateKey::from_hex(&stacks_private_key).unwrap();
+        let pk = StacksPublicKey::from_private(&sender_key);
+        let address = StacksAddress::from_public_keys(
+            address_version(&parse_version(network).0),
+            &AddressHashMode::SerializeP2PKH,
+            1,
+            &vec![pk],
+        ).unwrap();
+        Ok((sender_key, address))
+    }
+    fn parse_bitcoin_private_key(bitcoin_private_key: String) -> Result<(SecretKey, XOnlyPublicKey), Error> {
+        let secp = Secp256k1::new();
+        let sender_key = SecretKey::from_str(&bitcoin_private_key).unwrap();
+        let key_pair_source = KeyPair::from_secret_key(&secp, &sender_key);
+        let (xonly_public_key, _) = key_pair_source.x_only_public_key();
+        Ok((sender_key, xonly_public_key))
+    }
+
     fn spawn_processes_and_get_config(relay_url: String) -> (Config, HttpNetListen) {
         env::set_var("RUST_LOG", "info");
 
@@ -620,7 +717,27 @@ mod test {
             .map(|i| (i + 1, create_signer_key_ids(i, keys_per_signer)))
             .collect::<SignerKeyIds>();
         let public_keys = create_public_keys(&signer_private_keys, keys_per_signer);
+        let stacks_private_key_str =  "7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801";
+        let (stacks_private_key, stacks_address) = parse_stacks_private_key(stacks_private_key_str.to_string(), NetworkVersion::Regtest)
+            .unwrap();
+        let stacks_node_rpc_url = Url::try_from("http://localhost:20443").unwrap();
+        let stacks_version = TransactionVersion::Testnet;
+        let bitcoin_private_key_str = "2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90";
+        let (bitcoin_private_key, bitcoin_xonly_pubkey) = parse_bitcoin_private_key(bitcoin_private_key_str.to_string()).unwrap();
+        let bitcoin_node_rpc_url = Url::try_from("http://devnet:devnet@localhost:18443").unwrap();
+        let transaction_fee = 2000;
+        let bitcoin_network = Network::Regtest;
+
         let coordinator_config = Config::new(
+            stacks_private_key,
+            stacks_address,
+            stacks_node_rpc_url.clone(),
+            stacks_version,
+            bitcoin_private_key,
+            bitcoin_xonly_pubkey,
+            bitcoin_node_rpc_url.clone(),
+            transaction_fee,
+            bitcoin_network,
             keys_threshold,
             coordinator_public_key,
             public_keys.clone(),
@@ -631,7 +748,20 @@ mod test {
         let signer_configs = signer_private_keys
             .iter()
             .map(|k| {
+                let (stacks_private_key, stacks_address) = parse_stacks_private_key(
+                    StacksPrivateKey::new().to_hex(),
+                    NetworkVersion::Regtest
+                ).unwrap();
                 Config::new(
+                    stacks_private_key,
+                    stacks_address,
+                    stacks_node_rpc_url.clone(),
+                    stacks_version,
+                    bitcoin_private_key,
+                    bitcoin_xonly_pubkey,
+                    bitcoin_node_rpc_url.clone(),
+                    transaction_fee,
+                    bitcoin_network,
                     keys_threshold,
                     coordinator_public_key,
                     public_keys.clone(),
