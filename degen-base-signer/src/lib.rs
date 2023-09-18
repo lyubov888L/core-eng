@@ -13,7 +13,7 @@ pub mod bitcoin_wallet;
 pub mod bitcoin_scripting;
 pub mod peg_wallet;
 pub mod stacks_wallet;
-mod util_versioning;
+pub mod util_versioning;
 
 // set via _compile-time_ envars
 const GIT_BRANCH: Option<&'static str> = option_env!("GIT_BRANCH");

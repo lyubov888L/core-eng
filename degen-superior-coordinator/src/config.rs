@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{KeyPair, XOnlyPublicKey};
+use tracing::info;
 use blockstack_lib::{
     address::AddressHashMode,
     burnchains::Address,
@@ -42,6 +43,7 @@ pub enum Error {
 pub enum Network {
     Mainnet,
     Testnet,
+    Regtest,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -125,6 +127,7 @@ impl RawConfig {
         match self.network.as_ref().unwrap_or(&Network::Mainnet) {
             Network::Mainnet => (TransactionVersion::Mainnet, bitcoin::Network::Bitcoin),
             Network::Testnet => (TransactionVersion::Testnet, bitcoin::Network::Testnet),
+            Network::Regtest => (TransactionVersion::Testnet, bitcoin::Network::Regtest),
         }
     }
 }

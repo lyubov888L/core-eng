@@ -67,7 +67,7 @@ pub fn create_tx_from_user_to_script (
     amount: u64,
     fee: u64,
     tx_index: usize,
-) -> (Transaction, u64) {
+) -> Transaction {
     let outpoint = OutPoint::new(
         Txid::from_str(&outputs_vec[tx_index].txid.as_str()).unwrap(), 
         outputs_vec[tx_index].vout.clone()
@@ -75,7 +75,7 @@ pub fn create_tx_from_user_to_script (
 
     let left_amount = &outputs_vec[tx_index].amount - amount - fee;
 
-    (Transaction {
+    Transaction {
         version: 2,
         lock_time: PackedLockTime(0),
         input: vec![TxIn {
@@ -94,7 +94,7 @@ pub fn create_tx_from_user_to_script (
                 script_pubkey: script_address.script_pubkey(),
             }
         ],
-    }, left_amount)
+    }
 }
 
 pub fn sign_tx_user_to_script(

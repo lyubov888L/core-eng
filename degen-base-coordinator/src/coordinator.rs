@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use bitcoin::{Address, Txid};
+use bitcoin::util::taproot::TapBranchHash;
 use blockstack_lib::burnchains::bitcoin::address::BitcoinAddress;
 use blockstack_lib::types::chainstate::StacksAddress;
 use degen_base_signer::signing_round::UtxoError;
@@ -180,24 +181,25 @@ where
         self.network.send_message(create_scripts_message)?;
         Ok(())
     }
-    fn wait_for_create_scripts(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>) {
+    fn wait_for_create_scripts(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>, Vec<TapBranchHash>) {
         let mut ids_to_await: HashSet<u32> = (1..=self.total_signers).collect();
-        let (mut utxo, mut stacks_address) = (vec![], vec![]);
+        let (mut utxo, mut stacks_address, mut merkle_root) = (vec![], vec![], vec![]);
         while !ids_to_await.is_empty() {
             if let MessageTypes::DegensCreateScriptsResponse(response) = self.wait_for_next_message().unwrap().msg {
                 ids_to_await.remove(&response.signer_id);
                 utxo.push(response.utxo);
                 stacks_address.push(response.stacks_address);
+                merkle_root.push(response.merkle_root);
             }
         }
-        (utxo, stacks_address)
+        (utxo, stacks_address, merkle_root)
     }
-    pub fn run_create_scripts_generation(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>) {
+    pub fn run_create_scripts_generation(&mut self) -> (Vec<Result<UTXO, UtxoError>>, Vec<StacksAddress>, Vec<TapBranchHash>) {
         // things to be done by coordinator
         info!("Starting to create scripts");
         self.start_scripts().unwrap();
-        let (utxo, stacks_address) = self.wait_for_create_scripts();
-        (utxo, stacks_address)
+        let (utxo, stacks_address, merkle_root) = self.wait_for_create_scripts();
+        (utxo, stacks_address, merkle_root)
     }
 
     fn start_public_shares(&mut self) -> Result<(), Error> {

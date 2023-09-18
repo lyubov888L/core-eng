@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use bitcoin::{Address, Network, OutPoint};
-use stacks_coordinator::{
+use degen_base_signer::{
     bitcoin_node::{BitcoinNode, LocalhostBitcoinNode},
     bitcoin_wallet::BitcoinWallet,
     peg_wallet::BitcoinWallet as BitcoinWalletTrait,

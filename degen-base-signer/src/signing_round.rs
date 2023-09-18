@@ -41,6 +41,7 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
 use bdk::miniscript::ToPublicKey;
+use bitcoin::util::taproot::{TapBranchHash, TaprootSpendInfo};
 use itertools::Itertools;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -407,6 +408,7 @@ impl Signable for DegensScriptRequest {
 pub struct DegensScriptResponse {
     pub signer_id: u32,
     pub stacks_address: StacksAddress,
+    pub merkle_root: TapBranchHash,
     pub utxo: Result<UTXO, UtxoError>,
 }
 
@@ -417,6 +419,8 @@ impl Signable for DegensScriptResponse {
 
         hasher.update(self.stacks_address.bytes.as_bytes());
         hasher.update(self.stacks_address.version.to_be_bytes());
+
+        hasher.update(self.merkle_root.to_vec().as_slice());
 
         match &self.utxo {
             Ok(utxo) => {
@@ -913,8 +917,8 @@ impl SigningRound {
 
         let (tap_info, script_address) = create_tree(&secp, aggregate_x_only, &script_1, &script_2);
 
-        let amount_to_script: u64 = 2000;
-        let fee: u64 = 1000;
+        let amount_to_script: u64 = 1000;
+        let fee: u64 = 300;
         let transactions_to_script: u64 = 1;
 
         for i in 1..=transactions_to_script {
@@ -926,15 +930,18 @@ impl SigningRound {
             let mut valid_utxos = vec![];
             let mut total_amount: u64 = 0;
 
-            unspent_list_signer.sort_by(|a, b| b.confirmations.partial_cmp(&a.confirmations).unwrap());
+            // This works, but we have no confirmations because of the node not mining blocks
+            // Switch back to it once the issue is fixed
+            // unspent_list_signer.sort_by(|a, b| b.confirmations.partial_cmp(&a.confirmations).unwrap());
+            unspent_list_signer.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
             for utxo in unspent_list_signer.clone() {
-                if total_amount < amount_to_script {
+                if total_amount < amount_to_script + fee {
                     total_amount += utxo.amount;
                     valid_utxos.push(utxo);
                 }
             }
 
-            if total_amount < amount_to_script {
+            if total_amount < amount_to_script + fee {
                 valid_utxos = vec![];
                 total_amount = 0;
             }
@@ -953,7 +960,7 @@ impl SigningRound {
 
             let prevouts_signer = Prevouts::One(0, unspent_list_txout[0].clone());
 
-            let (user_to_script_unsigned, amount_left) = create_tx_from_user_to_script(
+            let user_to_script_unsigned = create_tx_from_user_to_script(
                 &valid_utxos,
                 &self.bitcoin_wallet.address(),
                 &script_address,
@@ -992,7 +999,6 @@ impl SigningRound {
         let signed_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, &tap_info);
 
         let signed_txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx).unwrap();
-        info!("{signed_txid:#?}");
 
         let good_utxo = get_good_utxo_from_list(utxos, amount_to_script);
 
@@ -1001,6 +1007,7 @@ impl SigningRound {
         let response = DegensScriptResponse {
             signer_id: self.signer.signer_id,
             stacks_address: self.stacks_address,
+            merkle_root: tap_info.merkle_root().unwrap(),
             utxo: good_utxo,
         };
 

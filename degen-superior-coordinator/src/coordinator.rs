@@ -321,7 +321,7 @@ impl StacksCoordinator {
     }
 
     pub fn run_create_script(&mut self) -> Result<u64> {
-        let (response_utxos, response_stacks_addresses) = self.frost_coordinator.run_create_scripts_generation();
+        let (response_utxos, response_stacks_addresses, response_merkle_roots) = self.frost_coordinator.run_create_scripts_generation();
         // check if signers sent correct details to coordinator
         let mut utxos= vec![];
         let mut bad_actors = vec![];
@@ -351,9 +351,9 @@ impl StacksCoordinator {
                 &Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
             ],
             &utxos,
-            300,
+            1000,
         );
-        let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
+        let signed_tx = self.sign_tx_from_script(utxos, tx, response_merkle_roots).unwrap();
         info!("{:#?}", signed_tx);
         let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
         info!("{txid:#?}");
@@ -437,7 +437,7 @@ fn create_frost_coordinator_from_path(
             &coordinator_public_key,
             nonce,
         )?;
-        stacks_node.broadcast_transaction(&coordinator_tx)?;
+        // stacks_node.broadcast_transaction(&coordinator_tx)?;
     }
     Ok(coordinator)
 }
@@ -580,7 +580,7 @@ fn load_dkg_data(
         let nonce = stacks_node.next_nonce(address)?;
         let tx =
             stacks_wallet.build_set_bitcoin_wallet_public_key_transaction(&xonly_pubkey, nonce)?;
-        stacks_node.broadcast_transaction(&tx)?;
+        // stacks_node.broadcast_transaction(&tx)?;
         Ok(xonly_pubkey)
     }
 }
