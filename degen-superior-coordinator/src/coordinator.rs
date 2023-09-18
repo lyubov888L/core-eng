@@ -353,7 +353,7 @@ impl StacksCoordinator {
             &utxos,
             1000,
         );
-        let signed_tx = self.sign_tx_from_script(utxos, tx, response_merkle_roots).unwrap();
+        let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
         info!("{:#?}", signed_tx);
         let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
         info!("{txid:#?}");
