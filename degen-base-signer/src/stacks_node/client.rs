@@ -732,6 +732,9 @@ mod tests {
         types::chainstate::{StacksPrivateKey, StacksPublicKey},
         util::{hash::Hash160, secp256k1::MessageSignature},
     };
+    use crate::peg_wallet::StacksWallet as PegWallet;
+    use crate::stacks_node::Error;
+    use crate::stacks_wallet::StacksWallet;
 
     use crate::util_versioning::test::PRIVATE_KEY_HEX;
 
@@ -741,11 +744,13 @@ mod tests {
         sender: StacksAddress,
         mock_server: TcpListener,
         client: NodeClient,
+        coordinator_wallet: StacksWallet,
+        signer_wallet: StacksWallet,
     }
 
     impl TestConfig {
         pub fn new() -> Self {
-            let sender_key = StacksPrivateKey::from_hex(PRIVATE_KEY_HEX)
+            let sender_key = StacksPrivateKey::from_hex("eb92abc7cd7ab8d7590763d6aee37c60fd5bafa6048d4f0760a27dcded7d11c501")
                 .expect("Unable to generate stacks private key from hex string");
 
             let pk = StacksPublicKey::from_private(&sender_key);
@@ -766,20 +771,64 @@ mod tests {
                 Url::parse(&format!("http://{}", mock_server_addr))
                     .expect("Failed to parse mock server address"),
                 ContractName::from("mining-pool"),
-                StacksAddress::from_string("SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE").unwrap(),
+                StacksAddress::from_string("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
             );
+            let coordinator_wallet = StacksWallet::new(
+                ContractName::from("mining-pool"),
+                StacksAddress::from_string("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+                StacksPrivateKey::from_hex("753b7cc01a1a2e86221266a154af739463fce51219d97e4f856cd7200c3bd2a601").unwrap(),
+                StacksAddress::from_string("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+                TransactionVersion::Testnet,
+                2000);
+            let signer_wallet = StacksWallet::new(
+                ContractName::from("mining-pool"),
+                StacksAddress::from_string("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+                StacksPrivateKey::from_hex("eb92abc7cd7ab8d7590763d6aee37c60fd5bafa6048d4f0760a27dcded7d11c501").unwrap(),
+                StacksAddress::from_string("ST2XK3JZ0RYKPS38N9HHMYVHGTSABPNF98RPCJDQS").unwrap(),
+                TransactionVersion::Testnet,
+                2000);
             Self {
                 sender,
                 mock_server,
                 client,
+                coordinator_wallet,
+                signer_wallet,
             }
+        }
+    }
+
+    #[test]
+    fn smart_contract_flow() {
+        let config = TestConfig::new();
+        let signer_address = config.signer_wallet.address().clone();
+        let coordinator_address = config.coordinator_wallet.address().clone();
+
+        let h = spawn(move || config.signer_wallet.ask_to_join(0, [0u8; 32].serialize_to_vec()));
+        let tx = h.join().unwrap().unwrap();
+
+        let mut tx_bytes = [0u8; 1024];
+        {
+            let mut tx_bytes_writer = BufWriter::new(&mut tx_bytes[..]);
+            tx.consensus_serialize(&mut tx_bytes_writer).unwrap();
+            tx_bytes_writer.flush().unwrap();
+        }
+
+        let h = spawn(move || config.client.broadcast_transaction(&tx));
+
+        write_response(config.mock_server, b"HTTP/1.1 200 OK\n\n");
+
+        let broadcasted = h.join().unwrap();
+
+        match broadcasted {
+            Ok(()) => {}
+            Err(e) => {panic!("{}", e)}
         }
     }
 
     #[test]
     fn get_address_status() {
         let config = TestConfig::new();
-        let address = config.client.contract_address;
+        let address = config.signer_wallet.address().clone();
 
         let h = spawn(move || config.client.get_status(&address));
 

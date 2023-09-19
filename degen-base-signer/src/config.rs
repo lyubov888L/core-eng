@@ -6,8 +6,9 @@ use p256k1::{
 };
 
 use serde::Deserialize;
-use std::{fs, thread};
+use std::{fs, thread, time};
 use std::str::FromStr;
+use std::thread::sleep;
 use bincode::config;
 use bitcoin::{KeyPair, XOnlyPublicKey};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
@@ -316,72 +317,75 @@ impl Config {
 }
 
 fn operate_address_status_non_miner(
-    parsed_status: &MinerStatus,
     stacks_wallet: &StacksWallet,
     stacks_node: &mut NodeClient,
     stacks_address: &StacksAddress,
     bitcoin_pubkey: &XOnlyPublicKey,
 ) -> Result<MinerStatus, Error> {
-    let mut current_status: MinerStatus = parsed_status.clone();
-    if current_status == MinerStatus::Miner {
-        info!("Already miner!");
-    }
+    let mut current_status = stacks_node.get_status(stacks_address).unwrap();
+
+    // TODO: degens - delete these after querying for mempool done
+    let mut not_in_waiting_mempool = true;
+    let mut not_in_pending_mempool = true;
+    let mut not_in_mempool_to_be_miner = true;
+
     // hashbytes for the bitcoin p2pkh address
     // types.tuple({
     // version - link // https://github.com/stacksgov/sips/blob/feat/sip-015/sips/sip-015/sip-015-network-upgrade.md#new-method-get-burn-block-info
     //     version: types.buff(hash160(buffer_from('00'))),
     //     hashbytes: types.buff(hash160(buffer_from(publicKeyHex))),
     // })
-    // while current_status != MinerStatus::Miner {
-    // get nonce
-    let nonce = stacks_node.next_nonce(stacks_address).unwrap();
-    current_status == stacks_node.get_status(stacks_address).unwrap();
-    //  info!("stx addr {:?}", stacks_address.to_string()); // ST2XK3JZ0RYKPS38N9HHMYVHGTSABPNF98RPCJDQS
-    match current_status {
-        MinerStatus::NormalUser => {
-            // TODO: degens - query the mempool
-            let not_in_mempool = false;
-            // if not anywhere, make call ask to join
-            if not_in_mempool {
-                let tx = stacks_wallet.ask_to_join(nonce, bitcoin_pubkey.serialize().to_vec().clone()).unwrap();
-                info!("The tx for ask-to-join: {:#?}", tx);
-                info!("{:?}", stacks_node.broadcast_transaction(&tx));
-            }
-        }
-        MinerStatus::Waiting => {
-            // verify number of threshold met
-            let enough_voted = stacks_node.is_enough_voted_to_enter(stacks_address).unwrap();
-            if enough_voted {
-                // also query mempool
-                let not_in_mempool = false;
-                // if not anywhere, make call try-enter
-                if not_in_mempool {
-                    let tx = stacks_wallet.call_try_enter(nonce).unwrap();
-                    info!("The tx for try-enter: {:#?}", tx);
+    while current_status != MinerStatus::Miner {
+        match current_status {
+            MinerStatus::NormalUser => {
+                // TODO: degens - query the mempool
+                // let not_in_mempool = true;
+
+                if not_in_waiting_mempool {
+                    let tx = stacks_wallet.ask_to_join(stacks_node.next_nonce(stacks_address).unwrap(), bitcoin_pubkey.serialize().to_vec().clone()).unwrap();
+                    info!("The tx for ask-to-join: {:#?}", tx);
                     info!("{:?}", stacks_node.broadcast_transaction(&tx));
+                    not_in_waiting_mempool = false;
                 }
             }
-        }
-        MinerStatus::Pending => {
-            // verify enough blocks passed
-            let enough_blocks_passed = stacks_node.is_enough_blocks_passed_for_pending_miners(stacks_address).unwrap();
-            if enough_blocks_passed {
-                // also query mempool ( if anyone called this function in the last n blocks )
-                let not_in_mempool = false;
-                // if not anywhere, make call try-enter
-                if not_in_mempool {
-                    // if not anywhere, make call add-pending-miners-to-pool
-                    let tx = stacks_wallet.add_pending_miners_to_pool(nonce).unwrap();
-                    info!("The tx for add-pending-miners-to-pool: {:#?}", tx);
-                    info!("{:?}", stacks_node.broadcast_transaction(&tx));
+            MinerStatus::Waiting => {
+                // verify number of threshold met
+                let enough_voted = stacks_node.is_enough_voted_to_enter(stacks_address).unwrap();
+                if enough_voted {
+                    // also query mempool
+                    // let not_in_mempool = false;
+
+                    if not_in_pending_mempool {
+                        let tx = stacks_wallet.call_try_enter(stacks_node.next_nonce(stacks_address).unwrap()).unwrap();
+                        info!("The tx for try-enter: {:#?}", tx);
+                        info!("{:?}", stacks_node.broadcast_transaction(&tx));
+                        not_in_pending_mempool = false;
+                    }
                 }
             }
+            MinerStatus::Pending => {
+                // verify enough blocks passed
+                let enough_blocks_passed = stacks_node.is_enough_blocks_passed_for_pending_miners(stacks_address).unwrap();
+                if enough_blocks_passed {
+                    // also query mempool ( if anyone called this function in the last n blocks )
+                    // let not_in_mempool = false;
+
+                    if not_in_mempool_to_be_miner {
+                        // if not anywhere, make call add-pending-miners-to-pool
+                        let tx = stacks_wallet.add_pending_miners_to_pool(stacks_node.next_nonce(stacks_address).unwrap()).unwrap();
+                        info!("The tx for add-pending-miners-to-pool: {:#?}", tx);
+                        info!("{:?}", stacks_node.broadcast_transaction(&tx));
+                        not_in_mempool_to_be_miner = false;
+                    }
+                }
+            }
+            MinerStatus::Miner => {
+                break
+            }
         }
-        MinerStatus::Miner => {
-            // do nothing
-        }
+        sleep(time::Duration::from_secs(60));
+        current_status = stacks_node.get_status(stacks_address).unwrap();
     }
-    // }
     Ok(current_status)
 }
 
@@ -418,11 +422,8 @@ impl TryFrom<&RawConfig> for Config {
         let bitcoin_wallet = BitcoinWallet::new(bitcoin_xonly_public_key, bitcoin_network);
         let local_bitcoin_node = LocalhostBitcoinNode::new(bitcoin_node_rpc_url.clone());
         local_bitcoin_node.load_wallet(bitcoin_wallet.address()).unwrap();
-        let miner_status = local_stacks_node.get_status(&stacks_address).unwrap();
-        let status = operate_address_status_non_miner(&miner_status, &stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key).unwrap();
-        if (status != MinerStatus::Miner) {
-            // error
-        }
+        let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key).unwrap();
+
         Ok(Config::new(
             mining_name,
             mining_address,
@@ -445,7 +446,7 @@ impl TryFrom<&RawConfig> for Config {
             raw_config.signer_key_ids(),
             raw_config.network_private_key()?,
             raw_config.http_relay_url.clone(),
-            miner_status
+            status
         ))
     }
 }
