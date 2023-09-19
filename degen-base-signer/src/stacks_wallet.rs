@@ -184,7 +184,7 @@ impl StacksWallet {
     }
 
     pub fn vote_positive_remove_request(&self, nonce: u64, miner_address: StacksAddress) -> Result<StacksTransaction, Error> {
-        let function_name = "vote-positive-join-request";
+        let function_name = "vote-positive-remove-request";
         let principal = Value::Principal(PrincipalData::from(miner_address));
         let function_args: Vec<Value> = vec![principal];
         let tx = self.build_transaction_signed(function_name, function_args, nonce)?;
@@ -193,7 +193,7 @@ impl StacksWallet {
 
     // TODO: degens - find if needed or delete
     pub fn vote_negative_remove_request(&self, nonce: u64, miner_address: StacksAddress) -> Result<StacksTransaction, Error> {
-        let function_name = "vote-remove-join-request";
+        let function_name = "vote-negative-remove-request";
         let principal = Value::Principal(PrincipalData::from(miner_address));
         let function_args: Vec<Value> = vec![principal];
         let tx = self.build_transaction_signed(function_name, function_args, nonce)?;

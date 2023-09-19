@@ -277,11 +277,6 @@ impl StacksNode for NodeClient {
 
     fn next_nonce(&mut self, address: &StacksAddress) -> Result<u64, StacksNodeError> {
         debug!("Retrieving next nonce...");
-        if let Some(nonce) = self.next_nonce {
-            let next_nonce = nonce.wrapping_add(1);
-            self.next_nonce = Some(next_nonce);
-            return Ok(next_nonce);
-        }
         let address = address.to_string();
         let entry = "nonce";
         let route = format!("/v2/accounts/{}", address);
@@ -732,6 +727,7 @@ mod tests {
         types::chainstate::{StacksPrivateKey, StacksPublicKey},
         util::{hash::Hash160, secp256k1::MessageSignature},
     };
+    use blockstack_lib::util::secp256k1::Secp256k1PrivateKey;
     use crate::peg_wallet::StacksWallet as PegWallet;
     use crate::stacks_node::Error;
     use crate::stacks_wallet::StacksWallet;
@@ -739,6 +735,51 @@ mod tests {
     use crate::util_versioning::test::PRIVATE_KEY_HEX;
 
     use super::*;
+
+    struct ReadOnlyConfig {
+        stacks_node: NodeClient,
+        coordinator_wallet: StacksWallet,
+        signer_1_wallet: StacksWallet,
+        signer_2_wallet: StacksWallet,
+    }
+
+    impl ReadOnlyConfig {
+        pub fn new() -> Self {
+            let mut stacks_node = NodeClient::new(
+                Url::parse("https://stacks-node-api.testnet.stacks.co/").unwrap(),
+                ContractName::from( "mining-m3-testing-v1"),
+                StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
+            );
+            let coordinator_wallet = StacksWallet::new(
+                ContractName::from("mining-m3-testing-v1"),
+                StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
+                StacksPrivateKey::from_hex("c2eae79ad466a0a98d64e24fc27d0a8eaf75891c9029d5f821a67743affa874201").unwrap(),
+                StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
+                TransactionVersion::Testnet,
+                20000);
+            let signer_1_wallet = StacksWallet::new(
+                ContractName::from("mining-m3-testing-v1"),
+                StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
+                StacksPrivateKey::from_hex("811ad2e8f9bafb837c6f7df8521d71a2782b19701715b511018eaa93c3ed84da01").unwrap(),
+                StacksAddress::from_string("ST109H2F95ZKHDKW4G7DQSCV6ZRXJD9EA126HH4E1").unwrap(),
+                TransactionVersion::Testnet,
+                20000);
+            let signer_2_wallet = StacksWallet::new(
+                ContractName::from("mining-m3-testing-v1"),
+                StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
+                StacksPrivateKey::from_hex("5bfaefc764eb822296d21fc1ff36ff88c59c62419baa5c5cfb90194cd84af8e801").unwrap(),
+                StacksAddress::from_string("ST1T1XCR5RJ9NBFVMVAKWJDZ14M4RT9WJNNAK1A8Z").unwrap(),
+                TransactionVersion::Testnet,
+                20000);
+
+            Self {
+                stacks_node,
+                coordinator_wallet,
+                signer_1_wallet,
+                signer_2_wallet,
+            }
+        }
+    }
 
     struct TestConfig {
         sender: StacksAddress,
@@ -799,30 +840,341 @@ mod tests {
 
     #[test]
     fn smart_contract_flow() {
-        let config = TestConfig::new();
-        let signer_address = config.signer_wallet.address().clone();
+        let mut config = ReadOnlyConfig::new();
+        let signer_1_address = config.signer_1_wallet.address().clone();
+        let signer_2_address = config.signer_2_wallet.address().clone();
         let coordinator_address = config.coordinator_wallet.address().clone();
+        let mut stacks_node_clone = config.stacks_node.clone();
 
-        let h = spawn(move || config.signer_wallet.ask_to_join(0, [0u8; 32].serialize_to_vec()));
-        let tx = h.join().unwrap().unwrap();
+        // Function: get address status -> Coordinator is a miner
+        //
+        // let h = spawn(move || config.stacks_node.get_status(&coordinator_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, MinerStatus::Miner);
 
-        let mut tx_bytes = [0u8; 1024];
-        {
-            let mut tx_bytes_writer = BufWriter::new(&mut tx_bytes[..]);
-            tx.consensus_serialize(&mut tx_bytes_writer).unwrap();
-            tx_bytes_writer.flush().unwrap();
-        }
 
-        let h = spawn(move || config.client.broadcast_transaction(&tx));
+        // Function: get address status -> Signer 2 is a normal user
+        //
+        // let h = spawn(move || config.stacks_node.get_status(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, MinerStatus::NormalUser);
 
-        write_response(config.mock_server, b"HTTP/1.1 200 OK\n\n");
 
-        let broadcasted = h.join().unwrap();
+        // Function: get miners list -> Coordinator + Signer 1
+        //
+        // let h = spawn(move || config.stacks_node.get_miners_list(&signer_1_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, vec![coordinator_address, signer_1_address]);
 
-        match broadcasted {
-            Ok(()) => {}
-            Err(e) => {panic!("{}", e)}
-        }
+
+        // Function: get auto exchange -> Coordinator - false
+        //
+        // let h = spawn(move || config.stacks_node.is_auto_exchange(&coordinator_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, false);
+
+
+        // Function: ask to join -> Signer 2 - response (ok true)
+        // Example: 0x09002f8da81226a3a5cdccd0cc56b68d30070fea83547164f0c37ce1b1851dbd
+        //
+        // let h = spawn(move || config.signer_2_wallet.ask_to_join(stacks_node_clone.next_nonce(&signer_2_address).unwrap(), [0u8; 32].serialize_to_vec()));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: get address status -> Signer 2 is waiting
+        //
+        // let h = spawn(move || config.stacks_node.get_status(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, MinerStatus::Waiting);
+
+
+        // Function: is blacklisted -> Signer 2 - false
+        //
+        // let h = spawn(move || config.stacks_node.is_blacklisted(&coordinator_address, &signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, false);
+
+
+        // Function: vote positive join request - Coordinator -> Signer 2 - response (ok true)
+        // Example: 0x25389e6706b2ebc79f8c2930fc26f89f092b9df838a98d64d821b710e36b454e
+        //
+        // let h = spawn(move || config.coordinator_wallet.vote_positive_join_request(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: vote negative join request - Coordinator -> Signer 2 - response (err u108) - already voted
+        // Example: 0xf963742accbb6b218bcdebfac41bd7b32b0ddf7cc041c89b84e7a83dbb8cb94e
+        //
+        // let h = spawn(move || config.coordinator_wallet.vote_negative_join_request(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: is enough voted to enter -> Signer 2 - true
+        //
+        // let h = spawn(move || config.stacks_node.is_enough_voted_to_enter(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, true);
+
+
+        // Function: try enter pool - Signer 2 - response (ok true)
+        // Example: 0xca92cf119414a2fa484b787f1680ce0df3d403b3eebd6ff0b16af5589a6796bc
+        //
+        // let h = spawn(move || config.signer_2_wallet.call_try_enter(stacks_node_clone.next_nonce(&signer_2_address).unwrap()));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: get address status -> Signer 2 is pending
+        //
+        // let h = spawn(move || config.stacks_node.get_status(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, MinerStatus::Pending);
+
+
+        // Function: can enter pending miners -> true
+        //
+        // let h = spawn(move || config.stacks_node.is_enough_blocks_passed_for_pending_miners(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, true);
+
+
+        // Function: add pending miners to pool - Signer 2 - response (ok true)
+        // Example: 0x72d1b3938cbcb868710d509ba1fccbd00113e7db790c6509ab5b7419b5fe2db2
+        //
+        // let h = spawn(move || config.signer_2_wallet.add_pending_miners_to_pool(stacks_node_clone.next_nonce(&signer_2_address).unwrap()));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: get address status -> Signer 2 is miner
+        //
+        // let h = spawn(move || config.stacks_node.get_status(&signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, MinerStatus::Miner);
+
+
+        // Function: get miners list -> Coordinator + Signer 1 + Signer 2
+        //
+        // let h = spawn(move || config.stacks_node.get_miners_list(&signer_1_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, vec![coordinator_address, signer_1_address, signer_2_address]);
+
+
+        // Function: get notifier -> Coordinator
+        //
+        // let h = spawn(move || config.stacks_node.get_notifier(&signer_1_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, PrincipalData::from(coordinator_address));
+
+
+        // Function: get warnings -> Signer 2 - 0
+        //
+        // let h = spawn(move || config.stacks_node.get_warn_number_user(&coordinator_address, &signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, 0);
+
+
+        // Function: warn - Signer 2 - response (ok true)
+        // Example: 0x1c9b21c037a71cca0008d5546cdfece10aaeaca4de6abd56259fb0b043f08e3a
+        //
+        // let h = spawn(move || config.coordinator_wallet.warn_miner(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: get warnings -> Signer 2 - 1
+        //
+        // let h = spawn(move || config.stacks_node.get_warn_number_user(&coordinator_address, &signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, 1);
+
+
+        // Function: warn - Signer 2 - response (ok true)
+        // Example: 0xda326274b176c008c37b87e263134e6f2856f8cd002c9c5f12e408bb827776c3
+        //
+        // let h = spawn(move || config.coordinator_wallet.warn_miner(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: get warnings -> Signer 2 - 2
+        //
+        // let h = spawn(move || config.stacks_node.get_warn_number_user(&coordinator_address, &signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, 2);
+
+
+        // Function: propose removal - Coordinator -> Signer 2 - response (ok true)
+        // Example: 0x4b92dc1314da17a3156599215686133f6af6e4311dd54c058e35a4d8dc9c915atrue
+        //
+        // let h = spawn(move || config.coordinator_wallet.propose_removal(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: vote negative remove request - Coordinator -> Signer 2 - response (ok true)
+        // Example: 0xf0d0e101bb024dd02b04dc8646f99b7a83d064c6ef684189bb5f94e1b313f2a6
+        //
+        // let h = spawn(move || config.coordinator_wallet.vote_negative_remove_request(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: propose removal - Coordinator -> Signer 2 - response (err u116) - signer 2 already proposed for removal (also need signer 1 negative vote)
+        // Example: 0xf68bff6a1be0d0ef59146bc1ff4d0cd08e8acd1228c79a20b7c013be48b9892a
+        //
+        // let h = spawn(move || config.coordinator_wallet.propose_removal(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}true
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: vote negative remove request - Signer 1 -> Signer 2 - response (ok true)
+        // Example: 0xa9f8ac532ba37bc4538427f0b22aa6d611ea5bd8a852fd85062ad7d195315688
+        //
+        // let h = spawn(move || config.signer_1_wallet.vote_negative_remove_request(stacks_node_clone.next_nonce(&signer_1_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: propose removal - Coordinator -> Signer 2 - response (ok true)
+        // Example: 0x6060697283c4570e73cd51cac142ced7c3019253b0f5bf8e82d17fb89325e63c
+        //
+        // let h = spawn(move || config.coordinator_wallet.propose_removal(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: vote positive remove request - Coordinator -> Signer 2 - response (ok true)
+        // Example: 0xfcb091e97b84d32cfa0056a9adb0db1ff1593f95ceaadb520e679d23671e4f2a
+        //
+        // let h = spawn(move || config.coordinator_wallet.vote_positive_remove_request(stacks_node_clone.next_nonce(&coordinator_address).unwrap(), signer_2_address));
+        // let tx = h.join().unwrap().unwrap();
+        //
+        // let h = spawn(move || config.stacks_node.broadcast_transaction(&tx));
+        // let broadcasted = h.join().unwrap();
+        //
+        // match broadcasted {
+        //     Ok(()) => {}
+        //     Err(e) => {panic!("{}", e)}
+        // }
+
+
+        // Function: is blacklisted -> Signer 2 - true
+        //
+        // let h = spawn(move || config.stacks_node.is_blacklisted(&coordinator_address, &signer_2_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, true);
+
+
+        // Function: get miners list -> Coordinator + Signer 1
+        //
+        // let h = spawn(move || config.stacks_node.get_miners_list(&signer_1_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, vec![coordinator_address, signer_1_address]);
     }
 
     #[test]
