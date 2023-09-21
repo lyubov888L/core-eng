@@ -278,8 +278,8 @@ impl StacksNode for NodeClient {
     fn next_nonce(&mut self, address: &StacksAddress) -> Result<u64, StacksNodeError> {
         debug!("Retrieving next nonce...");
         let address = address.to_string();
-        let entry = "nonce";
-        let route = format!("/v2/accounts/{}", address);
+        let entry = "possible_next_nonce";
+        let route = format!("/extended/v1/address/{}/nonces", address);
         let response = self.get_response(&route)?;
         if response.status() == StatusCode::NOT_FOUND {
             return Err(StacksNodeError::UnknownAddress(address));
@@ -293,6 +293,31 @@ impl StacksNode for NodeClient {
             .ok_or_else(|| StacksNodeError::InvalidJsonEntry(entry.to_string()))?;
         self.next_nonce = Some(nonce);
         Ok(nonce)
+    }
+
+
+    fn get_mempool_transactions(&mut self) -> Result<u64, StacksNodeError> {
+        debug!("Retrieving mempool transactions...");
+        let entry = "results";
+        let route = format!("/extended/v1/tx/mempool?limit=50");
+        let response = self.get_response(&route)?;
+        // if response.status() == StatusCode::NOT_FOUND {
+        //     return Err(StacksNodeError::UnknownAddress(address));
+        // }
+        let json = response
+            .json::<Value>()
+            .map_err(|_| StacksNodeError::BehindChainTip)?;
+        let transactions = json
+            .get(entry)
+            .and_then(|transaction| transaction.as_array())
+            .ok_or_else(|| StacksNodeError::InvalidJsonEntry(entry.to_string()))?;
+        let contract_call_transactions: Vec<&Value> = transactions
+            .iter()
+            .filter(|tx| tx["tx_type"] == "contract_call")
+            .collect();
+
+        println!("{:#?}\n{:#?}", contract_call_transactions, contract_call_transactions.len());
+        Ok(0)
     }
 
     fn broadcast_transaction(&self, tx: &StacksTransaction) -> Result<(), StacksNodeError> {
@@ -705,6 +730,22 @@ impl StacksNode for NodeClient {
         }
         return Ok(waiting_list);
     }
+
+    fn get_pool_total_spend_per_block(&self, sender: &StacksAddress) -> Result<u128, StacksNodeError> {
+        // input: no arguments
+        // output: uint
+        let function_name = "get-pool-total-spend-per-block";
+        let amount_data_hex = self.call_read(sender, function_name, &[])?;
+        let amount_data = ClarityValue::try_deserialize_hex_untyped(&amount_data_hex)?;
+        if let ClarityValue::UInt(amount) = amount_data {
+            Ok(amount)
+        } else {
+            Err(StacksNodeError::MalformedClarityValue(
+                function_name.to_string(),
+                amount_data,
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -747,25 +788,25 @@ mod tests {
         pub fn new() -> Self {
             let mut stacks_node = NodeClient::new(
                 Url::parse("https://stacks-node-api.testnet.stacks.co/").unwrap(),
-                ContractName::from( "mining-m3-testing-v1"),
+                ContractName::from( "mining-m3-testing-v2"),
                 StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
             );
             let coordinator_wallet = StacksWallet::new(
-                ContractName::from("mining-m3-testing-v1"),
+                ContractName::from("mining-m3-testing-v2"),
                 StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
                 StacksPrivateKey::from_hex("c2eae79ad466a0a98d64e24fc27d0a8eaf75891c9029d5f821a67743affa874201").unwrap(),
                 StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
                 TransactionVersion::Testnet,
                 20000);
             let signer_1_wallet = StacksWallet::new(
-                ContractName::from("mining-m3-testing-v1"),
+                ContractName::from("mining-m3-testing-v2"),
                 StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
                 StacksPrivateKey::from_hex("811ad2e8f9bafb837c6f7df8521d71a2782b19701715b511018eaa93c3ed84da01").unwrap(),
                 StacksAddress::from_string("ST109H2F95ZKHDKW4G7DQSCV6ZRXJD9EA126HH4E1").unwrap(),
                 TransactionVersion::Testnet,
                 20000);
             let signer_2_wallet = StacksWallet::new(
-                ContractName::from("mining-m3-testing-v1"),
+                ContractName::from("mining-m3-testing-v2"),
                 StacksAddress::from_string("ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3").unwrap(),
                 StacksPrivateKey::from_hex("5bfaefc764eb822296d21fc1ff36ff88c59c62419baa5c5cfb90194cd84af8e801").unwrap(),
                 StacksAddress::from_string("ST1T1XCR5RJ9NBFVMVAKWJDZ14M4RT9WJNNAK1A8Z").unwrap(),
@@ -845,6 +886,13 @@ mod tests {
         let signer_2_address = config.signer_2_wallet.address().clone();
         let coordinator_address = config.coordinator_wallet.address().clone();
         let mut stacks_node_clone = config.stacks_node.clone();
+
+        // Function: get pool total spend per block -> u3730000000
+        //
+        // let h = spawn(move || config.stacks_node.get_pool_total_spend_per_block(&coordinator_address));
+        // let status = h.join().unwrap().unwrap();
+        //
+        // assert_eq!(status, 3730000000);
 
         // Function: get address status -> Coordinator is a miner
         //

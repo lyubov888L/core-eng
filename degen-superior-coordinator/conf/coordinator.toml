@@ -1,4 +1,4 @@
-mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v1"
+mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v2"
 exchange_contract = "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.bridge-contract"
 stacks_private_key = "c2eae79ad466a0a98d64e24fc27d0a8eaf75891c9029d5f821a67743affa874201"
 stacks_node_rpc_url = "http://localhost:20443"

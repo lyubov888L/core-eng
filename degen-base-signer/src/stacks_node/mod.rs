@@ -58,6 +58,7 @@ pub trait StacksNode {
     fn get_peg_out_request_ops(&self, block_height: u64) -> Result<Vec<PegOutRequestOp>, Error>;
     fn burn_block_height(&self) -> Result<u64, Error>;
     fn next_nonce(&mut self, addr: &StacksAddress) -> Result<u64, Error>;
+    fn get_mempool_transactions(&mut self) -> Result<u64, Error>;
     fn broadcast_transaction(&self, tx: &StacksTransaction) -> Result<(), Error>;
     fn keys_threshold(&self, sender: &StacksAddress) -> Result<u128, Error>;
     fn public_keys(&self, sender: &StacksAddress) -> Result<PublicKeys, Error>;
@@ -75,6 +76,7 @@ pub trait StacksNode {
     fn get_reward_info_for_block_height(&self, sender: &StacksAddress, block_height: u128) -> Result<(u128, PrincipalData), Error>;
     fn get_miners_list(&self, sender: &StacksAddress) -> Result<Vec<StacksAddress>, Error>;
     fn get_waiting_list(&self, sender: &StacksAddress) -> Result<Vec<StacksAddress>, Error>;
+    fn get_pool_total_spend_per_block(&self, sender: &StacksAddress) -> Result<u128, Error>;
 }
 
 pub type PegInOp = burn_ops::PegInOp;

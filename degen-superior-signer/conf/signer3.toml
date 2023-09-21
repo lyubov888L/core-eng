@@ -1,4 +1,4 @@
-mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v1"
+mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v2"
 exchange_contract = "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.bridge-contract"
 stacks_private_key = "17ebd9a02291e3c4f54a953d16bc14442ea5ed82a06de290d44c9580394e5d4a01"
 bitcoin_private_key = "25c69df27df3f630daa05a344679474f383bf49e5c577354169f4858484abfe3"
