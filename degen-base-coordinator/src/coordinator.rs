@@ -22,11 +22,11 @@ use wsts::{
     common::{PolyCommitment, PublicNonce, Signature, SignatureShare},
     compute,
     errors::AggregatorError,
-    taproot::{Error as TaprootError, SchnorrProof},
+    taproot::SchnorrProof,
     v1, Point, Scalar,
 };
 use degen_base_signer::bitcoin_node::UTXO;
-use degen_base_signer::signing_round::DegensScriptRequest;
+use degen_base_signer::signing_round::{DegensScriptRequest, VoteOutActorRequest};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -36,8 +36,6 @@ pub enum Error {
     NoAggregatePublicKey,
     #[error("Aggregator failed to sign: {0}")]
     Aggregator(#[from] AggregatorError),
-    #[error("Taproot error")]
-    Taproot(TaprootError),
     #[error("SchnorrProof failed to verify")]
     SchnorrProofFailed,
     #[error("Operation timed out")]
@@ -200,6 +198,27 @@ where
         self.start_scripts().unwrap();
         let (utxo, stacks_address, merkle_root) = self.wait_for_create_scripts();
         (utxo, stacks_address, merkle_root)
+    }
+
+    fn start_voting_out(&mut self, actors: Vec<StacksAddress>) -> Result<(), Error> {
+        let vote_out = VoteOutActorRequest {
+            dkg_id: self.current_dkg_id,
+            aggregate_public_key: self.get_aggregate_public_key().unwrap_or(Point::default()),
+            actors_to_be_voted_out: actors,
+        };
+        let vote_out_message = Message {
+            sig: vote_out.sign(&self.network_private_key).expect(""),
+            msg: MessageTypes::VoteOutActorRequest(vote_out),
+        };
+        self.network.send_message(vote_out_message)?;
+        Ok(())
+    }
+
+    pub fn run_voting_actors_out(&mut self, actors: Vec<StacksAddress>) -> Result<(), Error> {
+        // things to be done by coordinator
+        info!("Voting out {:#?}", &actors);
+        self.start_voting_out(actors).unwrap();
+        Ok(())
     }
 
     fn start_public_shares(&mut self) -> Result<(), Error> {
@@ -427,7 +446,7 @@ where
 
         info!("Signature ({}, {})", sig.R, sig.z);
 
-        let proof = SchnorrProof::new(&sig).map_err(Error::Taproot)?;
+        let proof = SchnorrProof::new(&sig);
 
         info!("SchnorrProof ({}, {})", proof.r, proof.s);
 

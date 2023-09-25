@@ -326,7 +326,11 @@ impl StacksCoordinator {
         let mut utxos= vec![];
         let mut bad_actors = vec![];
         let mut good_actors = vec![];
-        let mut all_miners: Vec<StacksAddress> = vec![];
+        let mut impersonators_positions = vec![];
+        let mut to_be_voted_out = vec![];
+        let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
+
+        // Divide the addresses by the types of their response. If an error came through, add him to bad actors list.
         for position in 0..response_utxos.len() {
             if response_utxos[position].clone().unwrap_or(UTXO::default()) == UTXO::default() {
                 bad_actors.push(response_stacks_addresses[position]);
@@ -336,15 +340,58 @@ impl StacksCoordinator {
                 utxos.push(response_utxos[position].clone().unwrap())
             }
         }
+
+        // If there is a certain address in both bad and good list, it means someone is trying to impersonate others.
+        // Add the 'bad actor's position - len of list' (because later when we remove them, the index will decrease by 1 every removal) to a list
         for position in 0..bad_actors.len() {
             if good_actors.contains(&bad_actors[position]) {
-                bad_actors.remove(position);
-                all_miners.retain(|actor| actor != &bad_actors[position]);
+                impersonators_positions.push(position - impersonators_positions.len());
             }
         }
-        for good_actor in good_actors {
-            all_miners.retain(|actor| actor != &good_actor);
+
+        // For every impersonating actor, remove him from the bad actors list
+        for position in &impersonators_positions {
+            bad_actors.remove(*position);
         }
+
+        // Only keep people that are not bad actors in the miner's list
+        for bad_actor in &bad_actors {
+            all_miners.retain(|actor| &actor != &bad_actor);
+        }
+
+        // Also remove the good actors from the miner's list - so now, only impersonators are left (they didn't appear in any list)
+        for good_actor in &good_actors {
+            all_miners.retain(|actor| &actor != &good_actor);
+        }
+
+        // Add impersonators in bad miners list - delete this if we decide to take another action for them
+        for impersonator in all_miners {
+            bad_actors.push(impersonator);
+        }
+
+        // Check for warnings and warn or propose for removal the actors
+        for actor in bad_actors {
+            let warnings_number = self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor).expect("Failed to get warnings for user");
+            if warnings_number < 2 {
+                let tx = self.local_fee_wallet.stacks_wallet.warn_miner(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                self.local_stacks_node.broadcast_transaction(&tx).expect("Failed to broadcast warning transaction");
+            }
+            else {
+                let tx = self.local_fee_wallet.stacks_wallet.propose_removal(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
+                match broadcasted {
+                    Ok(()) => {
+                        to_be_voted_out.push(actor)
+                    }
+                    Err(e) => {
+                        info!("Failed to broadcast propose for removal transaction: {:?}", e)
+                    }
+                }
+            }
+        }
+
+        self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
+
         let tx = create_tx_from_txids(
             vec![
                 &Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),

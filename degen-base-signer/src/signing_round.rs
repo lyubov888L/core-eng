@@ -68,6 +68,7 @@ use crate::{
     util::{decrypt, encrypt, make_shared_secret},
 };
 use crate::signing_round::Error::UTXOAmount;
+use crate::stacks_node::StacksNode;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -223,6 +224,7 @@ pub enum MessageTypes {
     NonceResponse(NonceResponse),
     SignShareRequest(SignatureShareRequest),
     SignShareResponse(SignatureShareResponse),
+    VoteOutActorRequest(VoteOutActorRequest),
     DegensCreateScriptsRequest(DegensScriptRequest),
     DegensCreateScriptsResponse(DegensScriptResponse),
     DegensSpendScripts(DegensSpendScript),
@@ -386,6 +388,24 @@ impl Signable for SignatureShareResponse {
         for signature_share in &self.signature_shares {
             hasher.update(signature_share.id.to_be_bytes());
             hasher.update(signature_share.z_i.to_bytes());
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct VoteOutActorRequest {
+    pub dkg_id: u64,
+    pub aggregate_public_key: Point,
+    pub actors_to_be_voted_out: Vec<StacksAddress>,
+}
+
+impl Signable for VoteOutActorRequest {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_CREATE_SCRIPT_REQUEST".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.aggregate_public_key.to_string().as_bytes());
+        for actor in &self.actors_to_be_voted_out {
+            hasher.update(actor.to_string().as_bytes());
         }
     }
 }
@@ -556,7 +576,12 @@ impl SigningRound {
             MessageTypes::SignShareRequest(sign_share_request) => {
                 self.sign_share_request(sign_share_request)
             }
-            MessageTypes::NonceRequest(nonce_request) => self.nonce_request(nonce_request),
+            MessageTypes::NonceRequest(nonce_request) => {
+                self.nonce_request(nonce_request)
+            },
+            MessageTypes::VoteOutActorRequest(vote_out_request) => {
+                self.vote_miners_out_of_pool(vote_out_request)
+            }
             MessageTypes::DegensCreateScriptsRequest(degens_create_script) => {
                 self.degen_create_script(degens_create_script)
             }
@@ -901,6 +926,26 @@ impl SigningRound {
         Ok(vec![])
     }
 
+    fn vote_miners_out_of_pool(
+        &mut self,
+        vote_out_request: VoteOutActorRequest,
+    ) -> Result<Vec<MessageTypes>, Error> {
+        let actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out;
+        for actor in actors_to_be_voted_out {
+            let tx = self.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.stacks_address).unwrap(), actor).unwrap();
+            let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
+            match broadcasted {
+                Ok(()) => {
+                    info!("Successfully voted out {:?}", actor)
+                }
+                Err(e) => {
+                    info!("Failed voting {:?} out: {:?}", actor, e)
+                }
+            }
+        }
+        Ok(vec![])
+    }
+
     fn degen_create_script(
         &mut self,
         degens_create_script: DegensScriptRequest,
@@ -976,7 +1021,7 @@ impl SigningRound {
                 .unwrap();
         }
 
-        sleep(Duration::from_secs(self.signer.signer_id as u64));
+        sleep(Duration::from_secs((self.signer.signer_id * 2) as u64));
         self.local_bitcoin_node
             .load_wallet(&script_address)
             .unwrap();

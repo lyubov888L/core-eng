@@ -19,7 +19,7 @@ blockstack-core = { path = "stacks-blockchain" }
 clap = { version = "4.1.1", features = ["derive", "env"] }
 hex = "0.4.3"
 p256k1 = "5.4.1"
-wsts = "2.0"
+wsts = "3.0"
 rusqlite = "0.24.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

@@ -1,11 +1,11 @@
 use rand_core::OsRng;
 use wsts::taproot::test_helpers::{dkg, sign};
-use wsts::taproot::SchnorrProof;
 use wsts::v1::{self, SignatureAggregator};
 
 #[test]
 #[allow(non_snake_case)]
 fn pure_frost_test() {
+    const MSG: &[u8] = "It was many and many a year ago".as_bytes();
     let T = 3;
     let N = 4;
     let mut rng = OsRng;
@@ -16,22 +16,16 @@ fn pure_frost_test() {
     ];
 
     // DKG (Distributed Key Generation)
-    let A = dkg(&mut signers[..], &mut rng, None).unwrap();
+    let A = dkg(&mut signers[..], &mut rng).unwrap();
 
     // signing. Signers: 0 (parties: 0, 1) and 1 (parties: 2)
-    let result = {
-        // decide which signers will be used
-        let mut signers = [signers[0].clone(), signers[1].clone()];
+    let mut signers = [signers[0].clone(), signers[1].clone()];
 
-        const MSG: &[u8] = "It was many and many a year ago".as_bytes();
+    // get nonces and shares
+    let (nonces, shares) = sign(MSG, &mut signers, &mut rng, None);
 
-        // get nonces and shares
-        let (nonces, shares) = sign(MSG, &mut signers, &mut rng, None);
-
-        SignatureAggregator::new(N, T, A.clone())
-            .unwrap()
-            .sign_taproot(&MSG, &nonces, &shares, None)
-    };
-
-    assert!(SchnorrProof::new(&result.unwrap()).is_ok());
+    SignatureAggregator::new(N, T, A.clone())
+        .unwrap()
+        .sign_taproot(&MSG, &nonces, &shares, None)
+        .expect("failed to create valid schnorr proof");
 }
