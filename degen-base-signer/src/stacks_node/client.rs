@@ -384,74 +384,76 @@ impl StacksNode for NodeClient {
         &self,
         sender: &StacksAddress,
     ) -> Result<Option<PublicKey>, StacksNodeError> {
-        let function_name = "get-coordinator-data";
-        let coordinator_data_hex = self.call_read(sender, function_name, &[])?;
-        let coordinator_data = ClarityValue::try_deserialize_hex_untyped(&coordinator_data_hex)?;
-        if let ClarityValue::Optional(optional_data) = coordinator_data.clone() {
-            if let Some(ClarityValue::Tuple(tuple_data)) = optional_data.data.map(|boxed| *boxed) {
-                let value = tuple_data
-                    .data_map
-                    .get(&ClarityName::from("key"))
-                    .ok_or_else(|| {
-                        StacksNodeError::MalformedClarityValue(
-                            function_name.to_string(),
-                            coordinator_data.clone(),
-                        )
-                    })?;
-                if let ClarityValue::Sequence(SequenceData::Buffer(coordinator_public_key)) = value
-                {
-                    let public_key = PublicKey::try_from(coordinator_public_key.data.as_slice())
-                        .map_err(|_| {
-                            StacksNodeError::MalformedClarityValue(
-                                function_name.to_string(),
-                                coordinator_data,
-                            )
-                        })?;
-                    return Ok(Some(public_key));
-                } else {
-                    return Err(StacksNodeError::MalformedClarityValue(
-                        function_name.to_string(),
-                        coordinator_data,
-                    ));
-                }
-            }
-            return Ok(None);
-            // Err(StacksNodeError::MalformedClarityValue(
-            //     function_name.to_string(),
-            //     coordinator_data,
-            // ))
-        } else {
-            Ok(None)
-        }
+        Ok(None)
+        // let function_name = "get-coordinator-data";
+        // let coordinator_data_hex = self.call_read(sender, function_name, &[])?;
+        // let coordinator_data = ClarityValue::try_deserialize_hex_untyped(&coordinator_data_hex)?;
+        // if let ClarityValue::Optional(optional_data) = coordinator_data.clone() {
+        //     if let Some(ClarityValue::Tuple(tuple_data)) = optional_data.data.map(|boxed| *boxed) {
+        //         let value = tuple_data
+        //             .data_map
+        //             .get(&ClarityName::from("key"))
+        //             .ok_or_else(|| {
+        //                 StacksNodeError::MalformedClarityValue(
+        //                     function_name.to_string(),
+        //                     coordinator_data.clone(),
+        //                 )
+        //             })?;
+        //         if let ClarityValue::Sequence(SequenceData::Buffer(coordinator_public_key)) = value
+        //         {
+        //             let public_key = PublicKey::try_from(coordinator_public_key.data.as_slice())
+        //                 .map_err(|_| {
+        //                     StacksNodeError::MalformedClarityValue(
+        //                         function_name.to_string(),
+        //                         coordinator_data,
+        //                     )
+        //                 })?;
+        //             return Ok(Some(public_key));
+        //         } else {
+        //             return Err(StacksNodeError::MalformedClarityValue(
+        //                 function_name.to_string(),
+        //                 coordinator_data,
+        //             ));
+        //         }
+        //     }
+        //     return Ok(None);
+        //     // Err(StacksNodeError::MalformedClarityValue(
+        //     //     function_name.to_string(),
+        //     //     coordinator_data,
+        //     // ))
+        // } else {
+        //     Ok(None)
+        // }
     }
 
     fn bitcoin_wallet_public_key(
         &self,
         sender: &StacksAddress,
     ) -> Result<Option<XOnlyPublicKey>, StacksNodeError> {
-        let function_name = "get-bitcoin-wallet-public-key";
-        let bitcoin_wallet_public_key_hex = self.call_read(sender, function_name, &[])?;
-        let bitcoin_wallet_public_key =
-            ClarityValue::try_deserialize_hex_untyped(&bitcoin_wallet_public_key_hex)?;
-        if let ClarityValue::Optional(optional_data) = bitcoin_wallet_public_key.clone() {
-            if let Some(ClarityValue::Sequence(SequenceData::Buffer(public_key))) =
-                optional_data.data.map(|boxed| *boxed)
-            {
-                let xonly_pubkey = XOnlyPublicKey::from_slice(&public_key.data).map_err(|_| {
-                    StacksNodeError::MalformedClarityValue(
-                        function_name.to_string(),
-                        bitcoin_wallet_public_key,
-                    )
-                })?;
-                return Ok(Some(xonly_pubkey));
-            } else {
-                return Ok(None);
-            }
-        }
-        Err(StacksNodeError::MalformedClarityValue(
-            function_name.to_string(),
-            bitcoin_wallet_public_key,
-        ))
+        Ok(None)
+        // let function_name = "get-bitcoin-wallet-public-key";
+        // let bitcoin_wallet_public_key_hex = self.call_read(sender, function_name, &[])?;
+        // let bitcoin_wallet_public_key =
+        //     ClarityValue::try_deserialize_hex_untyped(&bitcoin_wallet_public_key_hex)?;
+        // if let ClarityValue::Optional(optional_data) = bitcoin_wallet_public_key.clone() {
+        //     if let Some(ClarityValue::Sequence(SequenceData::Buffer(public_key))) =
+        //         optional_data.data.map(|boxed| *boxed)
+        //     {
+        //         let xonly_pubkey = XOnlyPublicKey::from_slice(&public_key.data).map_err(|_| {
+        //             StacksNodeError::MalformedClarityValue(
+        //                 function_name.to_string(),
+        //                 bitcoin_wallet_public_key,
+        //             )
+        //         })?;
+        //         return Ok(Some(xonly_pubkey));
+        //     } else {
+        //         return Ok(None);
+        //     }
+        // }
+        // Err(StacksNodeError::MalformedClarityValue(
+        //     function_name.to_string(),
+        //     bitcoin_wallet_public_key,
+        // ))
     }
 
     fn get_status(&self, sender: &StacksAddress) -> Result<MinerStatus, StacksNodeError> {

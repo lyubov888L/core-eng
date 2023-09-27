@@ -936,7 +936,7 @@ impl SigningRound {
             let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
             match broadcasted {
                 Ok(()) => {
-                    info!("Successfully voted out {:?}", actor)
+                    info!("Successfully voted out {:?}", actor.to_string())
                 }
                 Err(e) => {
                     info!("Failed voting {:?} out: {:?}", actor, e)

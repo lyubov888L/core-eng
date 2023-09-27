@@ -329,6 +329,8 @@ impl StacksCoordinator {
         let mut impersonators_positions = vec![];
         let mut to_be_voted_out = vec![];
         let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
+        let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
+        all_miners.retain(|signer| signer != &coordinator);
 
         // Divide the addresses by the types of their response. If an error came through, add him to bad actors list.
         for position in 0..response_utxos.len() {
@@ -379,6 +381,10 @@ impl StacksCoordinator {
             else {
                 let tx = self.local_fee_wallet.stacks_wallet.propose_removal(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
                 let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
+
+                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                self.local_stacks_node.broadcast_transaction(&tx).expect("Failed to broadcast warning transaction");
+
                 match broadcasted {
                     Ok(()) => {
                         to_be_voted_out.push(actor)
@@ -390,6 +396,7 @@ impl StacksCoordinator {
             }
         }
 
+        // TODO: degens - user's votes get anchored before the propose for removal call, so they are useless.
         self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
 
         let tx = create_tx_from_txids(
@@ -400,10 +407,10 @@ impl StacksCoordinator {
             &utxos,
             1000,
         );
-        let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
-        info!("{:#?}", signed_tx);
-        let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
-        info!("{txid:#?}");
+        // let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
+        // info!("{:#?}", signed_tx);
+        // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
+        // info!("{txid:#?}");
         Ok(0)
     }
 }
