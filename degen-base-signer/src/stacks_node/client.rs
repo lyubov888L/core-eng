@@ -295,6 +295,27 @@ impl StacksNode for NodeClient {
         Ok(nonce)
     }
 
+    fn get_user_balance(&mut self, address: &StacksAddress) -> Result<u64, StacksNodeError> {
+        debug!("Retrieving account balance...");
+        let address = address.to_string();
+        let entry = "balance";
+        let route = format!("/v2/accounts/{}", address);
+        let response = self.get_response(&route)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(StacksNodeError::UnknownAddress(address));
+        }
+        let json = response
+            .json::<Value>()
+            .map_err(|_| StacksNodeError::BehindChainTip)?;
+        info!("{:#?}", json
+            .get(entry));
+        let balance = json
+            .get(entry)
+            .and_then(|balance| Some(u64::from_str_radix(&balance.as_str().unwrap()[2..], 16).unwrap()))
+            .ok_or_else(|| StacksNodeError::InvalidJsonEntry(entry.to_string()))?;
+
+        Ok(balance)
+    }
 
     fn get_mempool_transactions(&mut self) -> Result<u64, StacksNodeError> {
         debug!("Retrieving mempool transactions...");

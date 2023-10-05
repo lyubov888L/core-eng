@@ -58,6 +58,7 @@ pub trait StacksNode {
     fn get_peg_out_request_ops(&self, block_height: u64) -> Result<Vec<PegOutRequestOp>, Error>;
     fn burn_block_height(&self) -> Result<u64, Error>;
     fn next_nonce(&mut self, addr: &StacksAddress) -> Result<u64, Error>;
+    fn get_user_balance(&mut self, address: &StacksAddress) -> Result<u64, Error>;
     fn get_mempool_transactions(&mut self) -> Result<u64, Error>;
     fn broadcast_transaction(&self, tx: &StacksTransaction) -> Result<(), Error>;
     fn keys_threshold(&self, sender: &StacksAddress) -> Result<u128, Error>;

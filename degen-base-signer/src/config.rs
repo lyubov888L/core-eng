@@ -419,6 +419,25 @@ impl TryFrom<&RawConfig> for Config {
             stacks_version,
             raw_config.transaction_fee.clone(),
         );
+
+        let mut stacks_node_clone = local_stacks_node.clone();
+        thread::spawn(move || {
+            loop {
+                match stacks_node_clone.is_auto_exchange(&stacks_address) {
+                    Ok(auto_exchange) => {
+                        if auto_exchange == true && stacks_node_clone.get_user_balance(&stacks_address).unwrap() > 1000 * 1000000 {
+                            // TODO: build the auto-exchange flow
+                        }
+                    }
+                    Err(e) => {
+                        info!("Couldn't get auto exchange value: {:#?}", e);
+                    }
+                }
+                // TODO: change the time if needed (currently: autoexchange - 10 mins)
+                sleep(time::Duration::from_secs(600));
+            }
+        });
+
         let bitcoin_wallet = BitcoinWallet::new(bitcoin_xonly_public_key, bitcoin_network);
         let local_bitcoin_node = LocalhostBitcoinNode::new(bitcoin_node_rpc_url.clone());
         local_bitcoin_node.load_wallet(bitcoin_wallet.address()).unwrap();

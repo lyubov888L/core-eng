@@ -330,16 +330,26 @@ impl StacksCoordinator {
         let mut to_be_voted_out = vec![];
         let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
         let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
+        let amount_to_script = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!");
+        let mut can_create_tx = true;
         all_miners.retain(|signer| signer != &coordinator);
 
         // Divide the addresses by the types of their response. If an error came through, add him to bad actors list.
         for position in 0..response_utxos.len() {
-            if response_utxos[position].clone().unwrap_or(UTXO::default()) == UTXO::default() {
-                bad_actors.push(response_stacks_addresses[position]);
+            if response_utxos[position].clone().unwrap_or(UTXO::default()) != UTXO::default() {
+                // TODO: include the fee in the amount verification
+                if response_utxos[position].clone().unwrap().amount as u128 > amount_to_script {
+                    good_actors.push(response_stacks_addresses[position]);
+                    utxos.push(response_utxos[position].clone().unwrap());
+                }
+                else {
+                    can_create_tx = false;
+                    bad_actors.push(response_stacks_addresses[position]);
+                }
             }
             else {
-                good_actors.push(response_stacks_addresses[position]);
-                utxos.push(response_utxos[position].clone().unwrap())
+                can_create_tx = false;
+                bad_actors.push(response_stacks_addresses[position]);
             }
         }
 
@@ -368,6 +378,7 @@ impl StacksCoordinator {
 
         // Add impersonators in bad miners list - delete this if we decide to take another action for them
         for impersonator in all_miners {
+            can_create_tx = false;
             bad_actors.push(impersonator);
         }
 
@@ -399,18 +410,23 @@ impl StacksCoordinator {
         // TODO: degens - user's votes get anchored before the propose for removal call, so they are useless.
         self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
 
-        let tx = create_tx_from_txids(
-            vec![
-                &Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
-                &Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
-            ],
-            &utxos,
-            1000,
-        );
-        // let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
-        // info!("{:#?}", signed_tx);
-        // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
-        // info!("{txid:#?}");
+        if can_create_tx {
+            let tx = create_tx_from_txids(
+                vec![
+                    &Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
+                    &Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
+                ],
+                &utxos,
+                1000,
+            );
+            // let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
+            // info!("{:#?}", signed_tx);
+            // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
+            // info!("{txid:#?}");
+        }
+        else {
+            // TODO: request to signers to refund funds for block height X
+        }
         Ok(0)
     }
 }

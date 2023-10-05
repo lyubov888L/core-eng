@@ -58,7 +58,7 @@ use crate::bitcoin_scripting::{
     sign_tx_script_refund, sign_tx_user_to_script,
 };
 use crate::bitcoin_wallet::BitcoinWallet;
-use crate::peg_wallet::BitcoinWallet as BitcoinWalletTrait;
+use crate::peg_wallet::{BitcoinWallet as BitcoinWalletTrait, StacksWallet as PegWallet};
 use crate::stacks_node::client::NodeClient;
 use crate::stacks_wallet::StacksWallet;
 use crate::{
@@ -962,7 +962,7 @@ impl SigningRound {
 
         let (tap_info, script_address) = create_tree(&secp, aggregate_x_only, &script_1, &script_2);
 
-        let amount_to_script: u64 = 1000;
+        let amount_to_script: u64 = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to script") as u64;
         let fee: u64 = 300;
         let transactions_to_script: u64 = 1;
 
