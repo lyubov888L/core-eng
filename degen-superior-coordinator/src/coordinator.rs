@@ -330,7 +330,7 @@ impl StacksCoordinator {
         let mut to_be_voted_out = vec![];
         let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
         let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
-        let amount_to_script = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!");
+        let amount_to_script = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!") / all_miners.len() as u128;
         let mut can_create_tx = true;
         all_miners.retain(|signer| signer != &coordinator);
 
@@ -338,7 +338,7 @@ impl StacksCoordinator {
         for position in 0..response_utxos.len() {
             if response_utxos[position].clone().unwrap_or(UTXO::default()) != UTXO::default() {
                 // TODO: include the fee in the amount verification
-                if response_utxos[position].clone().unwrap().amount as u128 > amount_to_script {
+                if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_script {
                     good_actors.push(response_stacks_addresses[position]);
                     utxos.push(response_utxos[position].clone().unwrap());
                 }
@@ -425,7 +425,8 @@ impl StacksCoordinator {
             // info!("{txid:#?}");
         }
         else {
-            // TODO: request to signers to refund funds for block height X
+            // TODO: replace block height with the needed one
+            self.frost_coordinator.run_script_refund(10).unwrap();
         }
         Ok(0)
     }

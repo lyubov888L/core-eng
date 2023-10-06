@@ -225,6 +225,7 @@ pub enum MessageTypes {
     SignShareRequest(SignatureShareRequest),
     SignShareResponse(SignatureShareResponse),
     VoteOutActorRequest(VoteOutActorRequest),
+    ScriptRefundRequest(ScriptRefundRequest),
     DegensCreateScriptsRequest(DegensScriptRequest),
     DegensCreateScriptsResponse(DegensScriptResponse),
     DegensSpendScripts(DegensSpendScript),
@@ -411,6 +412,22 @@ impl Signable for VoteOutActorRequest {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ScriptRefundRequest {
+    pub dkg_id: u64,
+    pub aggregate_public_key: Point,
+    pub block_height: u64,
+}
+
+impl Signable for ScriptRefundRequest {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_CREATE_SCRIPT_REQUEST".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.aggregate_public_key.to_string().as_bytes());
+        hasher.update(self.block_height.to_be_bytes());
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct DegensScriptRequest {
     pub dkg_id: u64,
     pub aggregate_public_key: Point,
@@ -581,6 +598,9 @@ impl SigningRound {
             },
             MessageTypes::VoteOutActorRequest(vote_out_request) => {
                 self.vote_miners_out_of_pool(vote_out_request)
+            }
+            MessageTypes::ScriptRefundRequest(script_refund_request) => {
+                self.refund_for_block_height(script_refund_request)
             }
             MessageTypes::DegensCreateScriptsRequest(degens_create_script) => {
                 self.degen_create_script(degens_create_script)
@@ -946,6 +966,15 @@ impl SigningRound {
         Ok(vec![])
     }
 
+    fn refund_for_block_height(
+        &mut self,
+        script_refund_request: ScriptRefundRequest,
+    ) -> Result<Vec<MessageTypes>, Error> {
+        // TODO: implement refund function
+        info!("refund i guess");
+        Ok(vec![])
+    }
+
     fn degen_create_script(
         &mut self,
         degens_create_script: DegensScriptRequest,
@@ -962,7 +991,7 @@ impl SigningRound {
 
         let (tap_info, script_address) = create_tree(&secp, aggregate_x_only, &script_1, &script_2);
 
-        let amount_to_script: u64 = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to script") as u64;
+        let amount_to_script: u64 = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to script") as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
         let fee: u64 = 300;
         let transactions_to_script: u64 = 1;
 

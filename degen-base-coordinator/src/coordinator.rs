@@ -26,7 +26,7 @@ use wsts::{
     v1, Point, Scalar,
 };
 use degen_base_signer::bitcoin_node::UTXO;
-use degen_base_signer::signing_round::{DegensScriptRequest, VoteOutActorRequest};
+use degen_base_signer::signing_round::{DegensScriptRequest, VoteOutActorRequest, ScriptRefundRequest};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -220,6 +220,20 @@ where
             info!("Voting out {:#?}", actor.to_string());
         });
         self.start_voting_out(actors).unwrap();
+        Ok(())
+    }
+
+    pub fn run_script_refund(&mut self, block_height: u64) -> Result<(), Error> {
+        let script_refund = ScriptRefundRequest {
+            dkg_id: self.current_dkg_id,
+            aggregate_public_key: self.get_aggregate_public_key().unwrap_or(Point::default()),
+            block_height,
+        };
+        let refund_message = Message {
+            sig: script_refund.sign(&self.network_private_key).expect(""),
+            msg: MessageTypes::ScriptRefundRequest(script_refund),
+        };
+        self.network.send_message(refund_message)?;
         Ok(())
     }
 
