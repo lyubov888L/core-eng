@@ -81,6 +81,14 @@ impl Signer {
                             .sign(&network_private_key)
                             .expect("failed to sign SignShareResponse")
                             .to_vec(),
+                        MessageTypes::SigShareRequestPox(msg) => msg
+                            .sign(&network_private_key)
+                            .expect("failed to sign SigShareRequestPox")
+                            .to_vec(),
+                        MessageTypes::SigShareResponsePox(msg) => msg
+                            .sign(&network_private_key)
+                            .expect("failed to sign SigShareResponsePox")
+                            .to_vec(),
                         MessageTypes::VoteOutActorRequest(msg) => msg
                             .sign(&network_private_key)
                             .expect("failed to sign VoteOutActorRequest")
@@ -260,6 +268,26 @@ fn verify_msg(
             } else {
                 warn!(
                     "Received a SignShareResponse message with an unknown id: {}",
+                    msg.signer_id
+                );
+                return false;
+            }
+        }
+        MessageTypes::SigShareRequestPox(msg) => {
+            if !msg.verify(&m.sig, coordinator_public_key) {
+                warn!("Received a SigShareRequestPox message with an invalid signature.");
+                return false;
+            }
+        }
+        MessageTypes::SigShareResponsePox(msg) => {
+            if let Some(public_key) = public_keys.signers.get(&msg.signer_id) {
+                if !msg.verify(&m.sig, public_key) {
+                    warn!("Received a SigShareResponsePox message with an invalid signature.");
+                    return false;
+                }
+            } else {
+                warn!(
+                    "Received a SigShareResponsePox message with an unknown id: {}",
                     msg.signer_id
                 );
                 return false;

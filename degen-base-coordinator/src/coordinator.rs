@@ -12,7 +12,7 @@ use degen_base_signer::{
     net::{Error as HttpNetError, Message, NetListen},
     signing_round::{
         DkgBegin, DkgPublicShare, MessageTypes, NonceRequest, NonceResponse, Signable,
-        SignatureShareRequest,
+        SignatureShareRequest, SigShareRequestPox, SigShareResponsePox,
     },
 };
 use hashbrown::HashSet;
@@ -396,6 +396,64 @@ where
         Ok(())
     }
 
+    fn request_sigshares_pox(
+        &self,
+        nonce_responses: &[NonceResponse],
+        msg: &[u8],
+    ) -> Result<(), Error> {
+        let signature_share_request = SigShareRequestPox {
+            dkg_id: self.current_dkg_id,
+            sign_id: self.current_sign_id,
+            correlation_id: 0,
+            nonce_responses: nonce_responses.to_vec(),
+            message: msg.to_vec(),
+        };
+
+        info!(
+            "Sending SigShareRequestPox dkg_id #{} sign_id #{} to signers",
+            signature_share_request.dkg_id, signature_share_request.sign_id
+        );
+
+        let signature_share_request_message = Message {
+            sig: signature_share_request
+                .sign(&self.network_private_key)
+                .expect("Failed to sign SigShareRequestPox"),
+            msg: MessageTypes::SigShareRequestPox(signature_share_request),
+        };
+
+        self.network.send_message(signature_share_request_message)?;
+
+        Ok(())
+    }
+
+    fn collect_sigshares_pox(&mut self) -> Result<(), Error> {
+        // get the parties who responded with a nonce
+        let mut signers: HashSet<u32> = HashSet::from_iter(self.public_nonces.keys().cloned());
+        while !signers.is_empty() {
+            match self.wait_for_next_message()?.msg {
+                MessageTypes::SigShareResponsePox(response) => {
+                    if let Some(_party_id) = signers.take(&response.signer_id) {
+                        info!(
+                            "Insert signature shares for signer_id {}",
+                            &response.signer_id
+                        );
+                        self.signature_shares
+                            .insert(response.signer_id, response.signature_shares.clone());
+                    }
+                    debug!(
+                        "signature shares for {} received.  left to receive: {:?}",
+                        response.signer_id, signers
+                    );
+                }
+                MessageTypes::SigShareRequestPox(_) => {}
+                msg => {
+                    warn!("SigSharePox loop got unexpected msg {:?}", msg.type_id());
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[allow(non_snake_case)]
     pub fn sign_message(&mut self, msg: &[u8]) -> Result<(Signature, SchnorrProof), Error> {
         debug!("Attempting to Sign Message");
@@ -440,6 +498,84 @@ where
         // request signature shares
         self.request_signature_shares(&nonce_responses, msg)?;
         self.collect_signature_shares()?;
+
+        let nonces = nonce_responses
+            .iter()
+            .flat_map(|nr| nr.nonces.clone())
+            .collect::<Vec<PublicNonce>>();
+        let shares = &self
+            .public_nonces
+            .iter()
+            .flat_map(|(i, _)| self.signature_shares[i].clone())
+            .collect::<Vec<SignatureShare>>();
+
+        info!(
+            "aggregator.sign({:?}, {:?}, {:?})",
+            msg,
+            nonces.len(),
+            shares.len()
+        );
+
+        let sig = aggregator.sign(msg, &nonces, shares)?;
+
+        info!("Signature ({}, {})", sig.R, sig.z);
+
+        let proof = SchnorrProof::new(&sig);
+
+        info!("SchnorrProof ({}, {})", proof.r, proof.s);
+
+        if !proof.verify(&self.aggregate_public_key.x(), msg) {
+            warn!("SchnorrProof failed to verify!");
+            return Err(Error::SchnorrProofFailed);
+        }
+
+        Ok((sig, proof))
+    }
+
+    #[allow(non_snake_case)]
+    pub fn sign_pox_transaction(&mut self, msg: &[u8]) -> Result<(Signature, SchnorrProof), Error> {
+        debug!("Attempting to Sign Message");
+        if self.aggregate_public_key == Point::default() {
+            return Err(Error::NoAggregatePublicKey);
+        }
+
+        //Continually compute a new aggregate nonce until we have a valid even R
+        loop {
+            let R = self.compute_aggregate_nonce(msg)?;
+            if R.has_even_y() {
+                debug!("Success: R has even y coord: {}", &R);
+                break;
+            } else {
+                warn!("Failure: R does not have even y coord: {}", R);
+            }
+        }
+
+        // make an array of dkg public share polys for SignatureAggregator
+        debug!(
+            "collecting commitments from 1..{} in {:?}",
+            self.total_keys,
+            self.dkg_public_shares.keys().collect::<Vec<&u32>>()
+        );
+        let polys: Vec<PolyCommitment> = self
+            .dkg_public_shares
+            .values()
+            .map(|ps| ps.public_share.clone())
+            .collect();
+
+        debug!(
+            "SignatureAggregator::new total_keys: {} threshold: {} commitments: {}",
+            self.total_keys,
+            self.threshold,
+            polys.len()
+        );
+
+        let mut aggregator = v1::SignatureAggregator::new(self.total_keys, self.threshold, polys)?;
+
+        let nonce_responses: Vec<NonceResponse> = self.public_nonces.values().cloned().collect();
+
+        // request signature shares
+        self.request_sigshares_pox(&nonce_responses, msg)?;
+        self.collect_sigshares_pox()?;
 
         let nonces = nonce_responses
             .iter()

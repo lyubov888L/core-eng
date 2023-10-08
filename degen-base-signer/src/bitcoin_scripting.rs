@@ -164,7 +164,7 @@ pub fn sign_tx_script_to_pox(
 }
 
 /// uses script sign
-/// TODO: how to sign multiple inputs using this?
+/// TODO: degens - how to sign multiple inputs using this?
 pub fn sign_tx_script_refund(
     secp: &Secp256k1<All>,
     tx_ref: &Transaction,
@@ -197,7 +197,7 @@ pub fn sign_tx_script_refund(
             .control_block(&(script.clone(), LeafVersion::TapScript))
             .unwrap();
 
-        // TODO: verify_p2tr_commitment works with key_pair_internal but not with key_pair_from_script
+        // TODO: degens - verify_p2tr_commitment works with key_pair_internal but not with key_pair_from_script
         // we don't have private/secret key for aggregated key in refund path
         // modifiy it to work with it or remove it
         // verify_p2tr_commitment(secp, script, key_pair_user, tap_info, &actual_control);

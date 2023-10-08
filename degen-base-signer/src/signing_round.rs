@@ -224,6 +224,8 @@ pub enum MessageTypes {
     NonceResponse(NonceResponse),
     SignShareRequest(SignatureShareRequest),
     SignShareResponse(SignatureShareResponse),
+    SigShareRequestPox(SigShareRequestPox),
+    SigShareResponsePox(SigShareResponsePox),
     VoteOutActorRequest(VoteOutActorRequest),
     ScriptRefundRequest(ScriptRefundRequest),
     DegensCreateScriptsRequest(DegensScriptRequest),
@@ -381,6 +383,54 @@ pub struct SignatureShareResponse {
 impl Signable for SignatureShareResponse {
     fn hash(&self, hasher: &mut Sha256) {
         hasher.update("SIGNATURE_SHARE_RESPONSE".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.sign_id.to_be_bytes());
+        hasher.update(self.correlation_id.to_be_bytes());
+        hasher.update(self.signer_id.to_be_bytes());
+
+        for signature_share in &self.signature_shares {
+            hasher.update(signature_share.id.to_be_bytes());
+            hasher.update(signature_share.z_i.to_bytes());
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SigShareRequestPox {
+    pub dkg_id: u64,
+    pub sign_id: u64,
+    pub correlation_id: u64,
+    pub nonce_responses: Vec<NonceResponse>,
+    pub message: Vec<u8>,
+}
+
+impl Signable for SigShareRequestPox {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("SIGSHARE_REQUEST_POX".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.sign_id.to_be_bytes());
+        hasher.update(self.correlation_id.to_be_bytes());
+
+        for nonce_response in &self.nonce_responses {
+            nonce_response.hash(hasher);
+        }
+
+        hasher.update(self.message.as_slice());
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SigShareResponsePox {
+    pub dkg_id: u64,
+    pub sign_id: u64,
+    pub correlation_id: u64,
+    pub signer_id: u32,
+    pub signature_shares: Vec<SignatureShare>,
+}
+
+impl Signable for SigShareResponsePox {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("SIGSHARE_RESPONSE_POX".as_bytes());
         hasher.update(self.dkg_id.to_be_bytes());
         hasher.update(self.sign_id.to_be_bytes());
         hasher.update(self.correlation_id.to_be_bytes());
@@ -593,6 +643,9 @@ impl SigningRound {
             MessageTypes::SignShareRequest(sign_share_request) => {
                 self.sign_share_request(sign_share_request)
             }
+            MessageTypes::SigShareRequestPox(sigshare_request_pox) => {
+                self.sigshare_request_pox(sigshare_request_pox)
+            }
             MessageTypes::NonceRequest(nonce_request) => {
                 self.nonce_request(nonce_request)
             },
@@ -784,7 +837,6 @@ impl SigningRound {
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut msgs = vec![];
 
-        // TODO: degens - verify output from tx from msgs to be the real 2 pox addresses
         let signer_ids = sign_request
             .nonce_responses
             .iter()
@@ -830,6 +882,63 @@ impl SigningRound {
                 msgs.push(response);
             } else {
                 debug!("SignShareRequest for {} dropped.", signer_id);
+            }
+        }
+        Ok(msgs)
+    }
+
+    fn sigshare_request_pox(
+        &mut self,
+        sign_request: SigShareRequestPox,
+    ) -> Result<Vec<MessageTypes>, Error> {
+        let mut msgs = vec![];
+
+        // TODO: degens - verify output from tx from msgs to be the real 2 pox addresses
+        let signer_ids = sign_request
+            .nonce_responses
+            .iter()
+            .map(|nr| nr.signer_id)
+            .collect::<Vec<u32>>();
+
+        info!("Got SigShareRequestPox for signer_ids {:?}", signer_ids);
+
+        for signer_id in &signer_ids {
+            if *signer_id == self.signer.signer_id {
+                let key_ids: Vec<u32> = sign_request
+                    .nonce_responses
+                    .iter()
+                    .flat_map(|nr| nr.key_ids.iter().copied())
+                    .collect::<Vec<u32>>();
+                let nonces = sign_request
+                    .nonce_responses
+                    .iter()
+                    .flat_map(|nr| nr.nonces.clone())
+                    .collect::<Vec<PublicNonce>>();
+                let signature_shares = self.signer.frost_signer.sign(
+                    &sign_request.message,
+                    &signer_ids,
+                    &key_ids,
+                    &nonces,
+                );
+
+                let response = SigShareResponsePox {
+                    dkg_id: sign_request.dkg_id,
+                    sign_id: sign_request.sign_id,
+                    correlation_id: sign_request.correlation_id,
+                    signer_id: *signer_id,
+                    signature_shares,
+                };
+
+                info!(
+                    "Sending SigShareResponsePox for signer_id {:?}",
+                    signer_id
+                );
+
+                let response = MessageTypes::SigShareResponsePox(response);
+
+                msgs.push(response);
+            } else {
+                debug!("SigShareRequestPox for {} dropped.", signer_id);
             }
         }
         Ok(msgs)
@@ -970,8 +1079,8 @@ impl SigningRound {
         &mut self,
         script_refund_request: ScriptRefundRequest,
     ) -> Result<Vec<MessageTypes>, Error> {
-        // TODO: implement refund function
-        info!("refund i guess");
+        // TODO: degens - implement refund function
+
         Ok(vec![])
     }
 
@@ -1110,7 +1219,6 @@ impl SigningRound {
 
         // // create new op using from_tx()
         // // create tx with recipient script address and block header
-        // // TODO: degens change amount to readonly sc call
         // let amount: u64 = 1000;
 
         // let script_address_pubkey = &script_address.script_pubkey();
@@ -1170,10 +1278,7 @@ impl SigningRound {
 
         // let (mut tx, prevouts_vec) = self.bitcoin_wallet.script_peg_out(&op, unspent_list).expect("Failed to construct transaction");
         //
-        // // TODO: is the tx signed? how to sign it if not?
         // info!("unsigned_tx: {:#?}", tx);
-        //
-        // // TODO: try here same format as on vs-code
         //
         // let prevout = Prevouts::One(
         //     0,
@@ -1194,15 +1299,8 @@ impl SigningRound {
         //
         // info!("signed_tx: {:#?}", tx);
         //
-        // // TODO: broadcast transaction (see how the tx was signed, if the current one isn't)
-        //
         // let script_txid = self.local_bitcoin_node.broadcast_transaction(&tx);
         // info!("broadcast_txid: {:#?}", script_txid);
-
-        // TODO: create another pegout with input the script address and output 2 user addresses in bitcoin_wallet
-
-        // TODO: send the message that the script was created and money sent to it
-        // TODO: the message contains signer's stacks address and script address (to keep track of the people who sent money), make a list for coordinator
 
         // send funds to script
         // my private key to spend through it

@@ -279,7 +279,7 @@ trait CoordinatorHelpers: Coordinator {
                 .map_err(Error::SigningError)?;
             let (_frost_sig, schnorr_proof) = self
                 .frost_coordinator_mut()
-                .sign_message(&taproot_sighash.as_hash())?;
+                .sign_pox_transaction(&taproot_sighash.as_hash())?;
             debug!(
                 "Fulfill Tx {:?} SchnorrProof ({},{})",
                 &tx, schnorr_proof.r, schnorr_proof.s
@@ -337,7 +337,7 @@ impl StacksCoordinator {
         // Divide the addresses by the types of their response. If an error came through, add him to bad actors list.
         for position in 0..response_utxos.len() {
             if response_utxos[position].clone().unwrap_or(UTXO::default()) != UTXO::default() {
-                // TODO: include the fee in the amount verification
+                // TODO: degens - include the fee in the amount verification
                 if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_script {
                     good_actors.push(response_stacks_addresses[position]);
                     utxos.push(response_utxos[position].clone().unwrap());
@@ -419,13 +419,13 @@ impl StacksCoordinator {
                 &utxos,
                 1000,
             );
-            // let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
-            // info!("{:#?}", signed_tx);
+            let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
+            info!("{:#?}", signed_tx);
             // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
             // info!("{txid:#?}");
         }
         else {
-            // TODO: replace block height with the needed one
+            // TODO: degens - replace block height with the needed one
             self.frost_coordinator.run_script_refund(10).unwrap();
         }
         Ok(0)

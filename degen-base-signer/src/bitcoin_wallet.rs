@@ -174,7 +174,7 @@ impl BitcoinWalletTrait for BitcoinWallet {
             change_amount, total_consumed, op.amount
         );
         // Do not want to use Script::new_v1_p2tr because it will tweak our key when we don't want it to
-        // TODO: update this
+        // TODO: degens - update this
         let public_key_tweaked = TweakedPublicKey::dangerous_assume_tweaked(self.public_key);
         let script_pubkey = Script::new_v1_p2tr_tweaked(public_key_tweaked);
         let fee = 300;
