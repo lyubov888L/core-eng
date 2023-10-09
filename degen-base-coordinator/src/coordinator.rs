@@ -215,7 +215,6 @@ where
     }
 
     pub fn run_voting_actors_out(&mut self, actors: Vec<StacksAddress>) -> Result<(), Error> {
-        // things to be done by coordinator
         &actors.iter().for_each(|actor| {
             info!("Voting out {:#?}", actor.to_string());
         });

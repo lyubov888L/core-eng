@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 use bdk::miniscript::ToPublicKey;
@@ -1059,19 +1060,25 @@ impl SigningRound {
         &mut self,
         vote_out_request: VoteOutActorRequest,
     ) -> Result<Vec<MessageTypes>, Error> {
-        let actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out;
-        for actor in actors_to_be_voted_out {
-            let tx = self.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.stacks_address).unwrap(), actor).unwrap();
-            let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
-            match broadcasted {
-                Ok(()) => {
-                    info!("Successfully voted out {:?}", actor.to_string())
-                }
-                Err(e) => {
-                    info!("Failed voting {:?} out: {:?}", actor, e)
+        let mut node_clone = self.local_stacks_node.clone();
+        let mut wallet_clone = self.stacks_wallet.clone();
+        thread::spawn(move || {
+            sleep(Duration::from_secs(1200));
+            let actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out;
+            for actor in actors_to_be_voted_out {
+                let tx = wallet_clone.vote_positive_remove_request(node_clone.clone().next_nonce(wallet_clone.address()).unwrap(), actor).unwrap();
+                let broadcasted = node_clone.broadcast_transaction(&tx);
+                match broadcasted {
+                    Ok(()) => {
+                        info!("Successfully voted out {:?}", actor.to_string())
+                    }
+                    Err(e) => {
+                        info!("Failed voting {:?} out: {:?}", actor.to_string(), e)
+                    }
                 }
             }
-        }
+        });
+
         Ok(vec![])
     }
 

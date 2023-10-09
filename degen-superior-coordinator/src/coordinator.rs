@@ -393,9 +393,6 @@ impl StacksCoordinator {
                 let tx = self.local_fee_wallet.stacks_wallet.propose_removal(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
                 let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
 
-                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
-                self.local_stacks_node.broadcast_transaction(&tx).expect("Failed to broadcast warning transaction");
-
                 match broadcasted {
                     Ok(()) => {
                         to_be_voted_out.push(actor)
@@ -404,11 +401,24 @@ impl StacksCoordinator {
                         info!("Failed to broadcast propose for removal transaction: {:?}", e)
                     }
                 }
+
+                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
+
+                match broadcasted {
+                    Ok(()) => {
+                        info!("Successfully voted out {:?}", actor.to_string())
+                    }
+                    Err(e) => {
+                        info!("Failed to broadcast vote positive removal transaction: {:?}", e)
+                    }
+                }
             }
         }
 
-        // TODO: degens - user's votes get anchored before the propose for removal call, so they are useless.
-        self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
+        if to_be_voted_out.len() > 0 {
+            self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
+        }
 
         if can_create_tx {
             let tx = create_tx_from_txids(
