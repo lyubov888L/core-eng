@@ -15,6 +15,8 @@ pub trait BitcoinNode {
     fn load_wallet(&self, address: &bitcoin::Address) -> Result<(), Error>;
     /// Get all utxos from the given address
     fn list_unspent(&self, address: &bitcoin::Address) -> Result<Vec<UTXO>, Error>;
+    /// Get all imported descriptors
+    fn list_descriptors(&self) -> Result<Vec<bitcoin::Address>, Error>;
 }
 
 pub type BitcoinTransaction = bitcoin::Transaction;
@@ -126,6 +128,36 @@ impl BitcoinNode for LocalhostBitcoinNode {
             .collect();
 
         result
+    }
+
+    fn list_descriptors(&self) -> Result<Vec<bitcoin::Address>, Error> {
+        let private = false;
+
+        let response = self.call("listdescriptors", [private])?;
+
+        let descriptors = response
+            .as_object()
+            .ok_or(Error::InvalidResponseJSON("Listdescriptors response is not an object".to_string()))?
+            .get("descriptors")
+            .ok_or(Error::InvalidResponseJSON("Missing 'descriptors' field".to_string()))?
+            .as_array()
+            .ok_or(Error::InvalidResponseJSON("'descriptors' is not an array".to_string()))?;
+
+        let result: Result<Vec<String>, Error> = descriptors
+            .iter()
+            .map(|desc| {
+                desc.as_object()
+                    .and_then(|obj| obj.get("desc"))
+                    .and_then(|desc_value| desc_value.as_str())
+                    .ok_or(Error::InvalidResponseJSON("Missing or invalid 'desc' field".to_string()))
+                    .map(|s| s[5..69].to_string())
+            })
+            .collect();
+
+        let mut address_list = vec![];
+        result.unwrap().iter().for_each(|address| address_list.push(bitcoin::Address::from_str(address.as_str()).unwrap()));
+
+        Ok(address_list)
     }
 }
 

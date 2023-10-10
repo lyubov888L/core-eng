@@ -11,7 +11,6 @@ use bitcoin::util::taproot;
 use bitcoin::util::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use crate::bitcoin_node::{LocalhostBitcoinNode, UTXO};
 use crate::signing_round::Error;
-use crate::signing_round::UtxoError::InvalidUTXO;
 
 pub fn create_script_refund(
     user_public_key: &XOnlyPublicKey,
@@ -39,7 +38,7 @@ pub fn create_tree(
     let builder = taproot::TaprootBuilder::with_huffman_tree(vec![
         (1, script_1.clone()),
         (1, script_2.clone()),
-    ]).unwrap(); // TODO: degens - or use unwrap check it
+    ]).unwrap();
 
     let tap_info = builder.finalize(secp, aggregate_x_only).unwrap();
 
@@ -61,37 +60,47 @@ pub fn get_current_block_height(client: &LocalhostBitcoinNode) -> u64 {
 }
 
 pub fn create_tx_from_user_to_script (
-    outputs_vec: &Vec<UTXO>,
+    previous_outputs_vec: &Vec<UTXO>,
     user_address: &Address,
     script_address: &Address,
     amount: u64,
     fee: u64,
-    tx_index: usize,
 ) -> Transaction {
-    let outpoint = OutPoint::new(
-        Txid::from_str(&outputs_vec[tx_index].txid.as_str()).unwrap(), 
-        outputs_vec[tx_index].vout.clone()
-    );
+    let mut inputs = vec![];
+    let mut total_utxo_amount: u64 = 0;
 
-    let left_amount = &outputs_vec[tx_index].amount - amount - fee;
+    for position in 0..previous_outputs_vec.len() {
+        let outpoint = OutPoint::new(
+            Txid::from_str(&previous_outputs_vec[position].txid.as_str()).unwrap(),
+            previous_outputs_vec[position].vout.clone()
+        );
+
+        total_utxo_amount = total_utxo_amount + previous_outputs_vec[position].amount;
+
+        inputs.push(
+            TxIn {
+                previous_output: outpoint,
+                script_sig: Script::new(),
+                sequence: Sequence(0x8030FFFF),
+                witness: Witness::default(),
+            }
+        )
+    }
+
+    let amount_back_to_user = total_utxo_amount - amount - fee;
 
     Transaction {
         version: 2,
         lock_time: PackedLockTime(0),
-        input: vec![TxIn {
-            previous_output: outpoint,
-            script_sig: Script::new(),
-            sequence: Sequence(0x8030FFFF),
-            witness: Witness::default(),
-        }],
+        input: inputs,
         output: vec![
             TxOut {
-                value: left_amount,
-                script_pubkey: user_address.script_pubkey(),
+                value: amount - fee,
+                script_pubkey: script_address.script_pubkey(),
             },
             TxOut {
-                value: amount,
-                script_pubkey: script_address.script_pubkey(),
+                value: amount_back_to_user,
+                script_pubkey: user_address.script_pubkey(),
             }
         ],
     }
@@ -104,27 +113,30 @@ pub fn sign_tx_user_to_script(
     key_pair_internal: &KeyPair,
 ) -> Transaction {
     let mut tx = tx_ref.clone();
-    let sighash_sig = SighashCache::new(&mut tx.clone())
-        .taproot_key_spend_signature_hash(0, prevouts, SchnorrSighashType::AllPlusAnyoneCanPay) // or All
-        .unwrap();
 
-    let tweak_key_pair = key_pair_internal.tap_tweak(secp, None);
-    // then sig
-    let msg = Message::from_slice(&sighash_sig).unwrap();
+    for position in 0..tx_ref.input.len() {
+        let sighash_sig = SighashCache::new(&mut tx.clone())
+            .taproot_key_spend_signature_hash(position, prevouts, SchnorrSighashType::AllPlusAnyoneCanPay) // or All
+            .unwrap();
 
-    let sig = secp.sign_schnorr(&msg, &tweak_key_pair.to_inner());
+        let tweak_key_pair = key_pair_internal.tap_tweak(secp, None);
+        // then sig
+        let msg = Message::from_slice(&sighash_sig).unwrap();
 
-    //verify sig
-    secp.verify_schnorr(&sig, &msg, &tweak_key_pair.to_inner().x_only_public_key().0)
-        .unwrap();
+        let sig = secp.sign_schnorr(&msg, &tweak_key_pair.to_inner());
 
-    // then witness
-    let schnorr_sig = SchnorrSig {
-        sig,
-        hash_ty: SchnorrSighashType::AllPlusAnyoneCanPay, // or All
-    };
+        //verify sig
+        secp.verify_schnorr(&sig, &msg, &tweak_key_pair.to_inner().x_only_public_key().0)
+            .unwrap();
 
-    tx.input[0].witness.push(schnorr_sig.serialize());
+        // then witness
+        let schnorr_sig = SchnorrSig {
+            sig,
+            hash_ty: SchnorrSighashType::AllPlusAnyoneCanPay, // or All
+        };
+
+        tx.input[position].witness.push(schnorr_sig.serialize());
+    }
 
     tx
 }
@@ -279,26 +291,4 @@ pub fn create_refund_tx(
             },
         ],
     })
-}
-
-pub fn get_good_utxo_from_list(
-    utxos_list: Vec<UTXO>,
-    amount: u64,
-) -> Result<UTXO, crate::signing_round::UtxoError> {
-    let mut found_utxo = false;
-    let mut good_utxo = UTXO::default();
-
-    for utxo in utxos_list {
-        if utxo.amount == amount {
-            good_utxo = utxo;
-            found_utxo = true;
-            break;
-        }
-    };
-
-    if !found_utxo {
-        return Err(InvalidUTXO);
-    }
-
-    Ok(good_utxo)
 }

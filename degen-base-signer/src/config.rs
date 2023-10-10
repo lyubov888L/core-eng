@@ -22,6 +22,7 @@ use p256k1::field::P;
 use toml;
 use tracing::info;
 use url::Url;
+use blockstack_lib::burnchains::bitcoin::address::BitcoinAddress;
 use crate::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode};
 use crate::bitcoin_wallet::BitcoinWallet;
 use crate::peg_wallet::BitcoinWallet as BitcoinWalletTrait;
@@ -110,6 +111,7 @@ struct RawConfig {
     pub bitcoin_node_rpc_url: String,
     /// The transaction fee in Satoshis used to broadcast transactions to the stacks node
     pub transaction_fee: u64,
+    pub amount_to_script: u64,
     pub network: Network,    pub http_relay_url: String,
     pub keys_threshold: u32,
     pub network_private_key: String,
@@ -248,6 +250,7 @@ pub struct Config {
     pub bitcoin_network: bitcoin::Network,
     pub http_relay_url: String,
     pub keys_threshold: u32,
+    pub amount_to_script: u64,
     pub network_private_key: Scalar,
     pub public_keys: PublicKeys,
     pub signer_key_ids: SignerKeyIds,
@@ -275,6 +278,7 @@ impl Config {
         transaction_fee: u64,
         bitcoin_network: bitcoin::Network,
         keys_threshold: u32,
+        amount_to_script: u64,
         coordinator_public_key: ecdsa::PublicKey,
         public_keys: PublicKeys,
         signer_key_ids: SignerKeyIds,
@@ -302,6 +306,7 @@ impl Config {
             coordinator_public_key,
             network_private_key,
             http_relay_url,
+            amount_to_script,
             total_signers: public_keys.signers.len().try_into().unwrap(),
             total_keys: public_keys.key_ids.len().try_into().unwrap(),
             public_keys,
@@ -421,6 +426,7 @@ impl TryFrom<&RawConfig> for Config {
         );
 
         let mut stacks_node_clone = local_stacks_node.clone();
+        let mut stacks_wallet_clone = stacks_wallet.clone();
         thread::spawn(move || {
             loop {
                 match stacks_node_clone.is_auto_exchange(&stacks_address) {
@@ -433,6 +439,30 @@ impl TryFrom<&RawConfig> for Config {
                         info!("Couldn't get auto exchange value: {:#?}", e);
                     }
                 }
+
+                let waiting_list = stacks_node_clone.get_waiting_list(&stacks_address).unwrap();
+
+                for waiting_miner in waiting_list {
+                    match stacks_node_clone.is_blacklisted(&stacks_address, &waiting_miner).unwrap() {
+                        true => {
+                            info!("{:#?} is blacklisted, skipping.", &waiting_miner.to_string())
+                        }
+                        false => {
+                            let tx = stacks_wallet_clone.vote_positive_join_request(stacks_node_clone.next_nonce(&stacks_address).unwrap(), waiting_miner).unwrap();
+                            let broadcasted = stacks_node_clone.broadcast_transaction(&tx);
+
+                            match broadcasted {
+                                Ok(()) => {
+                                    info!("Voted to accept {:#?} in pool.", &waiting_miner.to_string())
+                                }
+                                Err(e) => {
+                                    info!("Couldn't accept miner in pool: {:#?}", e)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 sleep(time::Duration::from_secs(600));
             }
         });
@@ -459,6 +489,7 @@ impl TryFrom<&RawConfig> for Config {
             raw_config.transaction_fee,
             bitcoin_network,
             raw_config.keys_threshold,
+            raw_config.amount_to_script,
             raw_config.coordinator_public_key()?,
             raw_config.public_keys()?,
             raw_config.signer_key_ids(),

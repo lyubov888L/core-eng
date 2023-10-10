@@ -327,7 +327,7 @@ impl StacksCoordinator {
         let mut bad_actors = vec![];
         let mut good_actors = vec![];
         let mut impersonators_positions = vec![];
-        let mut to_be_voted_out = vec![];
+        // let mut to_be_voted_out = vec![];
         let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
         let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
         let amount_to_script = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!") / all_miners.len() as u128;
@@ -561,6 +561,7 @@ fn create_frost_coordinator_from_contract(
         config.transaction_fee.clone(),
         config.bitcoin_network.clone(),
         keys_threshold.try_into().unwrap(),
+        config.amount_to_script,
         coordinator_public_key,
         public_keys,
         signer_key_ids,
