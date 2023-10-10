@@ -133,7 +133,7 @@ impl BitcoinNode for LocalhostBitcoinNode {
     fn list_descriptors(&self) -> Result<Vec<bitcoin::Address>, Error> {
         let private = false;
 
-        let response = self.call("listdescriptors", [private])?;
+        let response = self.call_wallet("listdescriptors", [private])?;
 
         let descriptors = response
             .as_object()

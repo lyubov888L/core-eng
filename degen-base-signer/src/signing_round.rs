@@ -1126,13 +1126,28 @@ impl SigningRound {
                 .unwrap();
         }
 
-        for utxo in self.local_bitcoin_node.list_unspent(&script_address).expect("Failed to retreive UTXOs for script address.") {
+        let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).expect("Failed to retreive UTXOs for script address.");
+
+        for utxo in script_utxos.clone() {
             if amount_to_pox <= utxo.amount {
                 script_utxo = Ok(utxo);
                 script_address_needs_funds = false;
             }
             else {
-                // TODO: add refund function here in case the amount on utxo is not enough
+                let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), fee).unwrap();
+
+                let mut txout_vec: Vec<TxOut> = vec![];
+                script_utxos.iter().for_each(|utxo| {
+                    txout_vec.push(TxOut {
+                        value: utxo.amount,
+                        script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+                    });
+                });
+
+                let signed_refund_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, &tap_info);
+
+                self.local_bitcoin_node.broadcast_transaction(&signed_refund_tx).unwrap();
+
                 script_utxo = Err(InvalidUTXO);
             }
         }

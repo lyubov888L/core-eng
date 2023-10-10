@@ -186,14 +186,13 @@ pub fn sign_tx_script_refund(
     tap_info: &TaprootSpendInfo,
 ) -> Transaction {
     let mut tx = tx_ref.clone();
-    let mut input_index: usize = 0;
 
     let prevouts = Prevouts::All(txout_vec);
 
-    for txout in txout_vec {
+    for position in 0..txout_vec.len() {
         let sighash_sig = SighashCache::new(&mut tx.clone())
             .taproot_script_spend_signature_hash(
-                input_index,
+                position,
                 &prevouts,
                 ScriptPath::with_defaults(script),
                 SchnorrSighashType::AllPlusAnyoneCanPay,
@@ -225,8 +224,7 @@ pub fn sign_tx_script_refund(
             actual_control.serialize(),
         ]);
 
-        tx.input[input_index].witness = wit;
-        input_index += 1;
+        tx.input[position].witness = wit;
     }
 
     tx
@@ -247,7 +245,6 @@ fn verify_p2tr_commitment(
 }
 
 pub fn create_refund_tx(
-    // outputs_vec: &Vec<UTXO>,
     utxos: &Vec<UTXO>,
     user_address: &Address,
     fee: u64,
