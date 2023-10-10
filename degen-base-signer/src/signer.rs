@@ -93,10 +93,6 @@ impl Signer {
                             .sign(&network_private_key)
                             .expect("failed to sign VoteOutActorRequest")
                             .to_vec(),
-                        MessageTypes::ScriptRefundRequest(msg) => msg
-                            .sign(&network_private_key)
-                            .expect("failed to sign ScriptRefundRequest")
-                            .to_vec(),
                         MessageTypes::DegensCreateScriptsRequest(msg) => msg
                             .sign(&network_private_key)
                             .expect("failed to sign DegensCreateScriptsRequest")
@@ -296,12 +292,6 @@ fn verify_msg(
         MessageTypes::VoteOutActorRequest(msg) => {
             if !msg.verify(&m.sig, coordinator_public_key) {
                 warn!("Received a VoteOutActorRequest message with an invalid signature.");
-                return false;
-            }
-        }
-        MessageTypes::ScriptRefundRequest(msg) => {
-            if !msg.verify(&m.sig, coordinator_public_key) {
-                warn!("Received a ScriptRefundRequest message with an invalid signature.");
                 return false;
             }
         }

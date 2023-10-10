@@ -434,10 +434,6 @@ impl StacksCoordinator {
             // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
             // info!("{txid:#?}");
         }
-        else {
-            // TODO: degens - replace block height with the needed one
-            self.frost_coordinator.run_script_refund(10).unwrap();
-        }
         Ok(0)
     }
 }
