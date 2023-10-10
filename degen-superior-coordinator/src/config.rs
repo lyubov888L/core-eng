@@ -127,7 +127,8 @@ impl RawConfig {
         // Determine what network we are running on
         match self.network.as_ref().unwrap_or(&Network::Mainnet) {
             Network::Mainnet => (TransactionVersion::Mainnet, bitcoin::Network::Bitcoin),
-            Network::Testnet => (TransactionVersion::Testnet, bitcoin::Network::Testnet),
+            // TODO: change the network back to Testnet
+            Network::Testnet => (TransactionVersion::Testnet, bitcoin::Network::Regtest),
             Network::Regtest => (TransactionVersion::Testnet, bitcoin::Network::Regtest),
         }
     }

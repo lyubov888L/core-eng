@@ -78,6 +78,7 @@ pub trait StacksNode {
     fn get_miners_list(&self, sender: &StacksAddress) -> Result<Vec<StacksAddress>, Error>;
     fn get_waiting_list(&self, sender: &StacksAddress) -> Result<Vec<StacksAddress>, Error>;
     fn get_pool_total_spend_per_block(&self, sender: &StacksAddress) -> Result<u128, Error>;
+    fn is_proposed_for_removal(&self, sender: &StacksAddress, address: &StacksAddress) -> Result<bool, Error>;
 }
 
 pub type PegInOp = burn_ops::PegInOp;

@@ -279,7 +279,7 @@ trait CoordinatorHelpers: Coordinator {
                 .map_err(Error::SigningError)?;
             let (_frost_sig, schnorr_proof) = self
                 .frost_coordinator_mut()
-                .sign_pox_transaction(&taproot_sighash.as_hash())?;
+                .sign_pox_transaction(&taproot_sighash.as_hash(), &sighash_tx)?;
             debug!(
                 "Fulfill Tx {:?} SchnorrProof ({},{})",
                 &tx, schnorr_proof.r, schnorr_proof.s
@@ -330,7 +330,7 @@ impl StacksCoordinator {
         let mut to_be_voted_out = vec![];
         let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
         let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
-        let amount_to_script = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!") / all_miners.len() as u128;
+        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!") / all_miners.len() as u128;
         let mut can_create_tx = true;
         all_miners.retain(|signer| signer != &coordinator);
 
@@ -338,7 +338,7 @@ impl StacksCoordinator {
         for position in 0..response_utxos.len() {
             if response_utxos[position].clone().unwrap_or(UTXO::default()) != UTXO::default() {
                 // TODO: degens - include the fee in the amount verification
-                if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_script {
+                if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_pox {
                     good_actors.push(response_stacks_addresses[position]);
                     utxos.push(response_utxos[position].clone().unwrap());
                 }
@@ -428,6 +428,7 @@ impl StacksCoordinator {
                 ],
                 &utxos,
                 1000,
+                self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).unwrap_or(0) as u64,
             );
             let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
             info!("{:#?}", signed_tx);
@@ -442,16 +443,21 @@ fn create_tx_from_txids(
     user_addresses: Vec<&Address>,
     utxos: &Vec<UTXO>,
     fee: u64,
+    total_amount: u64,
 ) -> BitcoinTransaction {
     let mut inputs = vec![];
     let mut outputs = vec![];
-    let mut total_amount: u64 = 0;
+    let amount_to_each_pox_address = total_amount / user_addresses.len() as u64;
+    let number_of_signers = utxos.len() as u64;
+
     for utxo in utxos {
+        let amount_back = utxo.amount - ((total_amount - fee) / number_of_signers);
+
         let outpoint = OutPoint::new(
             Txid::from_str(utxo.txid.as_str()).unwrap(),
             utxo.vout.clone()
         );
-        total_amount = total_amount + utxo.amount;
+
         inputs.push(
             TxIn {
                 previous_output: outpoint,
@@ -460,12 +466,18 @@ fn create_tx_from_txids(
                 witness: Witness::default(),
             }
         );
+        outputs.push(
+            TxOut {
+                value: amount_back,
+                script_pubkey: Script::from_str(&utxo.scriptPubKey).unwrap(),
+            }
+        )
     }
-    let amount_to_each_user = (total_amount - fee) / (user_addresses.len() as u64);
+
     for address in user_addresses {
         outputs.push(
             TxOut {
-                value: amount_to_each_user,
+                value: amount_to_each_pox_address,
                 script_pubkey: address.script_pubkey(),
             }
         )

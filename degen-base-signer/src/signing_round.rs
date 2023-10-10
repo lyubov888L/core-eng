@@ -7,7 +7,7 @@ use bitcoin::psbt::{PartiallySignedTransaction, Prevouts};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::util::sighash::SighashCache;
 use bitcoin::util::{base58, taproot};
-use bitcoin::Txid;
+use bitcoin::{Transaction, Txid};
 use bitcoin::{
     EcdsaSighashType, KeyPair, Network, OutPoint, PrivateKey, PublicKey, SchnorrSighashType,
     Script, TxOut, Witness, XOnlyPublicKey,
@@ -17,11 +17,12 @@ use blockstack_lib::burnchains::bitcoin::{
     BitcoinNetworkType, BitcoinTransaction, BitcoinTxOutput,
 };
 use blockstack_lib::burnchains::{
-    Address, BurnchainBlockHeader, BurnchainTransaction, PrivateKey as PrivateKeyTrait,
+    BurnchainBlockHeader, BurnchainTransaction, PrivateKey as PrivateKeyTrait,
 };
 use blockstack_lib::chainstate::burn::operations::PegOutRequestOp;
 use blockstack_lib::chainstate::burn::Opcodes;
 use blockstack_lib::chainstate::stacks::address::PoxAddress;
+use bitcoin::util::address::Address;
 use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
 use blockstack_lib::types::chainstate::{BurnchainHeaderHash, StacksAddress};
 use blockstack_lib::util::hash::{Hash160, Sha256Sum};
@@ -42,7 +43,8 @@ use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 use bdk::miniscript::ToPublicKey;
-use bitcoin::util::taproot::{TapBranchHash, TaprootSpendInfo};
+use bitcoin::psbt::serialize::Serialize as TransactionSerializer;
+use bitcoin::util::taproot::{TapBranchHash, TaprootSpendInfo, TapSighashHash};
 use itertools::Itertools;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -71,6 +73,7 @@ use crate::{
 use crate::signing_round::Error::UTXOAmount;
 use crate::signing_round::UtxoError::InvalidUTXO;
 use crate::stacks_node::StacksNode;
+use blockstack_lib::burnchains::Address as BitcoinAddressTrait;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -92,6 +95,8 @@ pub enum Error {
     FeeError,
     #[error("UTXO amount too low")]
     UTXOAmount,
+    #[error("The transaction to pox had invalid amount and/or pox addresses")]
+    InvalidTransaction,
 }
 
 #[derive(thiserror::Error, Debug, Clone, Serialize, Deserialize)]
@@ -404,6 +409,7 @@ pub struct SigShareRequestPox {
     pub correlation_id: u64,
     pub nonce_responses: Vec<NonceResponse>,
     pub message: Vec<u8>,
+    pub transaction: Transaction,
 }
 
 impl Signable for SigShareRequestPox {
@@ -418,6 +424,7 @@ impl Signable for SigShareRequestPox {
         }
 
         hasher.update(self.message.as_slice());
+        hasher.update(bitcoin::psbt::serialize::Serialize::serialize(&self.transaction).as_slice())
     }
 }
 
@@ -876,56 +883,82 @@ impl SigningRound {
         sign_request: SigShareRequestPox,
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut msgs = vec![];
+        let transaction_outputs = sign_request.transaction.output;
+        let mut pox_addresses = vec![
+            Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
+            Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
+        ];
+        let mut pox_amount: u64 = 0;
+        let pox_sc_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
 
-        // TODO: degens - verify output from tx from msgs to be the real 2 pox addresses
-        let signer_ids = sign_request
-            .nonce_responses
-            .iter()
-            .map(|nr| nr.signer_id)
-            .collect::<Vec<u32>>();
+        transaction_outputs.iter().for_each(|output| {
+            match Address::from_script(&output.script_pubkey, self.bitcoin_network) {
+                Ok(address) => {
+                    if pox_addresses.clone().contains(&address) {
+                        pox_addresses.retain(|user| user != &address);
+                        pox_amount = pox_amount + output.value;
+                    }
+                }
+                Err(e) => {
+                    info!("Couldn't retreive address from UTXO: {:?}", e);
+                }
+            }
+        });
 
-        info!("Got SigShareRequestPox for signer_ids {:?}", signer_ids);
+        if pox_addresses.len() == 0 && pox_amount == pox_sc_amount {
+            let signer_ids = sign_request
+                .nonce_responses
+                .iter()
+                .map(|nr| nr.signer_id)
+                .collect::<Vec<u32>>();
 
-        for signer_id in &signer_ids {
-            if *signer_id == self.signer.signer_id {
-                let key_ids: Vec<u32> = sign_request
-                    .nonce_responses
-                    .iter()
-                    .flat_map(|nr| nr.key_ids.iter().copied())
-                    .collect::<Vec<u32>>();
-                let nonces = sign_request
-                    .nonce_responses
-                    .iter()
-                    .flat_map(|nr| nr.nonces.clone())
-                    .collect::<Vec<PublicNonce>>();
-                let signature_shares = self.signer.frost_signer.sign(
-                    &sign_request.message,
-                    &signer_ids,
-                    &key_ids,
-                    &nonces,
-                );
+            info!("Got SigShareRequestPox for signer_ids {:?}", signer_ids);
 
-                let response = SigShareResponsePox {
-                    dkg_id: sign_request.dkg_id,
-                    sign_id: sign_request.sign_id,
-                    correlation_id: sign_request.correlation_id,
-                    signer_id: *signer_id,
-                    signature_shares,
-                };
+            for signer_id in &signer_ids {
+                if *signer_id == self.signer.signer_id {
+                    let key_ids: Vec<u32> = sign_request
+                        .nonce_responses
+                        .iter()
+                        .flat_map(|nr| nr.key_ids.iter().copied())
+                        .collect::<Vec<u32>>();
+                    let nonces = sign_request
+                        .nonce_responses
+                        .iter()
+                        .flat_map(|nr| nr.nonces.clone())
+                        .collect::<Vec<PublicNonce>>();
+                    let signature_shares = self.signer.frost_signer.sign(
+                        &sign_request.message,
+                        &signer_ids,
+                        &key_ids,
+                        &nonces,
+                    );
 
-                info!(
+                    let response = SigShareResponsePox {
+                        dkg_id: sign_request.dkg_id,
+                        sign_id: sign_request.sign_id,
+                        correlation_id: sign_request.correlation_id,
+                        signer_id: *signer_id,
+                        signature_shares,
+                    };
+
+                    info!(
                     "Sending SigShareResponsePox for signer_id {:?}",
                     signer_id
                 );
 
-                let response = MessageTypes::SigShareResponsePox(response);
+                    let response = MessageTypes::SigShareResponsePox(response);
 
-                msgs.push(response);
-            } else {
-                debug!("SigShareRequestPox for {} dropped.", signer_id);
+                    msgs.push(response);
+                } else {
+                    debug!("SigShareRequestPox for {} dropped.", signer_id);
+                }
             }
+            Ok(msgs)
         }
-        Ok(msgs)
+        else {
+            info!("The transaction did not contain the correct addresses or amount");
+            Err(Error::InvalidTransaction)
+        }
     }
 
     fn dkg_begin(&mut self, dkg_begin: DkgBegin) -> Result<Vec<MessageTypes>, Error> {
@@ -1045,20 +1078,41 @@ impl SigningRound {
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut node_clone = self.local_stacks_node.clone();
         let mut wallet_clone = self.stacks_wallet.clone();
+
         thread::spawn(move || {
-            sleep(Duration::from_secs(1200));
-            let actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out;
-            for actor in actors_to_be_voted_out {
-                let tx = wallet_clone.vote_positive_remove_request(node_clone.clone().next_nonce(wallet_clone.address()).unwrap(), actor).unwrap();
-                let broadcasted = node_clone.broadcast_transaction(&tx);
-                match broadcasted {
-                    Ok(()) => {
-                        info!("Successfully voted out {:?}", actor.to_string())
-                    }
-                    Err(e) => {
-                        info!("Failed voting {:?} out: {:?}", actor.to_string(), e)
+            let mut actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out.clone();
+            loop {
+                for actor in actors_to_be_voted_out.clone() {
+                    match node_clone.clone().is_proposed_for_removal(wallet_clone.address(), &actor) {
+                        Ok(value) => {
+                            if value == true {
+                                let tx = wallet_clone.vote_positive_remove_request(node_clone.clone().next_nonce(wallet_clone.address()).unwrap(), actor).unwrap();
+                                let broadcasted = node_clone.broadcast_transaction(&tx);
+                                match broadcasted {
+                                    Ok(()) => {
+                                        info!("Successfully voted out {:?}", actor.to_string());
+                                        actors_to_be_voted_out.retain(|user| user != &actor);
+
+                                        // If the actor has the code running, panic for him in order to stop receiving signals from coordinator
+                                        if wallet_clone.address() == &actor {
+                                            panic!("You got kicked out of pool!");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info!("Failed voting {:?} out: {:?}", actor.to_string(), e)
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("Could not check if {:?} is proposed for removal.", actor.to_string());
+                        }
                     }
                 }
+                if actors_to_be_voted_out.len() == 0 {
+                    break
+                }
+                sleep(Duration::from_secs(300));
             }
         });
 
@@ -1091,7 +1145,7 @@ impl SigningRound {
         let imported_addresses = self.local_bitcoin_node.list_descriptors().unwrap();
 
         if imported_addresses.contains(&script_address) == false {
-            sleep(Duration::from_secs((self.signer.signer_id) as u64));
+            sleep(Duration::from_secs((self.signer.signer_id * 2) as u64));
             self.local_bitcoin_node
                 .load_wallet(&script_address)
                 .unwrap();
@@ -1199,118 +1253,6 @@ impl SigningRound {
         msgs.push(response);
 
         Ok(msgs)
-
-        // let unspent_list = self.local_bitcoin_node.list_unspent(&script_address).unwrap();
-        // info!("script_address: {script_address:#?}");
-        // info!("unspent list: {unspent_list:#?}");
-        //
-        // let amount = 1000;
-        //
-        // let pox_addr_1 = bitcoin::Address::from_str("BCRT1P8M4KHK8A06CUCAWGPPQ3GDKEXTH7MZF6DGW54KZ67TKFQ3RCUU5QNKHUDG").unwrap();
-        // let pox_addr_2 = bitcoin::Address::from_str("BCRT1P6HNYZU0USW758H2F04GMWDGYWXAK9PAMA9S7AQ7NZEMXVGG0JTHSN9DNZN").unwrap();
-        // let addresses_list = vec![pox_addr_1, pox_addr_2, script_address];
-        //
-        // let script_unsigned_tx = create_tx_from_user_to_script(&unspent_list, &addresses_list, amount, 0);
-        //
-        // info!("{script_unsigned_tx:#?}");
-
-        // let script_txid = self.local_bitcoin_node.broadcast_transaction(&script_signed_tx);
-
-        // info!("{script_txid:#?}");
-
-        // // create new op using from_tx()
-        // // create tx with recipient script address and block header
-        // let amount: u64 = 1000;
-
-        // let script_address_pubkey = &script_address.script_pubkey();
-        // let script_address_bytes = script_address_pubkey.as_bytes();
-        //
-        // let mut script_pubkey = vec![81, 32]; // OP_1 OP_PUSHBYTES_32
-        // script_pubkey.extend_from_slice(&script_address_bytes);
-        //
-        // let mut msg = amount.to_be_bytes().to_vec();
-        // msg.extend_from_slice(&script_pubkey);
-        //
-        // let signature = self.stacks_private_key
-        //     .sign(Sha256Sum::from_data(&msg).as_bytes())
-        //     .expect("Failed to sign amount and recipient fields.");
-        //
-        // let mut data = vec![];
-        // data.extend_from_slice(&amount.to_be_bytes());
-        // data.extend_from_slice(signature.as_bytes());
-        //
-        // let output_script_address = BitcoinAddress::from_scriptpubkey(
-        //     BitcoinNetworkType::Regtest,
-        //     script_address_bytes
-        // ).unwrap();
-        //
-        // let output = BitcoinTxOutput {
-        //     address: output_script_address,
-        //     units: amount,
-        // };
-        //
-        // let mut rng = rand::thread_rng();
-        //
-        // let peg_wallet_address = rng.gen::<[u8; 32]>();
-        // let output2 = BitcoinTxOutput {
-        //     units: amount,
-        //     address: BitcoinAddress::Segwit(SegwitBitcoinAddress::P2TR(true, peg_wallet_address)),
-        // };
-        //
-        // let header = BurnchainBlockHeader {
-        //     block_height: 0,
-        //     block_hash: [0; 32].into(),
-        //     parent_block_hash: [0; 32].into(),
-        //     num_txs: 0,
-        //     timestamp: 0,
-        // };
-        //
-        // let burnchain_tx: BurnchainTransaction = BurnchainTransaction::Bitcoin(BitcoinTransaction {
-        //     txid: Txid([0; 32]),
-        //     vtxindex: 0,
-        //     opcode: Opcodes::PegOutRequest as u8,
-        //     data,
-        //     data_amt: 0,
-        //     inputs: vec![],
-        //     outputs: vec![output, output2],
-        // });
-        //
-        // let op = PegOutRequestOp::from_tx(&header, &burnchain_tx).expect("Failed to construct peg-out request op");
-
-        // let (mut tx, prevouts_vec) = self.bitcoin_wallet.script_peg_out(&op, unspent_list).expect("Failed to construct transaction");
-        //
-        // info!("unsigned_tx: {:#?}", tx);
-        //
-        // let prevout = Prevouts::One(
-        //     0,
-        //     prevouts_vec[0].clone(),
-        // );
-        // let sig = sign_key_tx(&secp, &tx, &prevout, &keypair, &tap_info);
-        // tx.input[0].witness.push(sig);
-        //
-        //
-        // // for index in 0..tx.input.len() {
-        // //     let prevout = Prevouts::One(
-        // //         0,
-        // //         prevouts_vec[index].clone(),
-        // //     );
-        // //     let sig = sign_key_tx(&secp, &tx, &prevout, &keypair, &tap_info);
-        // //     tx.input[index].witness.push(sig);
-        // // }
-        //
-        // info!("signed_tx: {:#?}", tx);
-        //
-        // let script_txid = self.local_bitcoin_node.broadcast_transaction(&tx);
-        // info!("broadcast_txid: {:#?}", script_txid);
-
-        // send funds to script
-        // my private key to spend through it
-        // my address
-
-        // retrieve script address/public key
-
-        // how do we want to return the addresses? change type? all functions have this return type
-        // Ok(vec![])
     }
 }
 

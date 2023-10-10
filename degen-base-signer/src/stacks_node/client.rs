@@ -769,6 +769,25 @@ impl StacksNode for NodeClient {
             ))
         }
     }
+
+    fn is_proposed_for_removal(
+        &self,
+        sender: &StacksAddress,
+        address: &StacksAddress
+    ) -> Result<bool, StacksNodeError> {
+        let function_name = "check-is-proposed-for-removal-now";
+
+        let is_proposed_for_removal_hex = self.call_read(sender, function_name, &[("0x".to_owned() + &(hex::encode(ClarityValue::Principal(PrincipalData::from(*address)).serialize_to_vec()))).as_str()])?;
+        let is_proposed_for_removal_value =  ClarityValue::try_deserialize_hex_untyped(&is_proposed_for_removal_hex)?;
+        if let ClarityValue::Bool(is_proposed_for_removal) = is_proposed_for_removal_value {
+            Ok(is_proposed_for_removal)
+        } else {
+            Err(StacksNodeError::MalformedClarityValue(
+                function_name.to_string(),
+                is_proposed_for_removal_value,
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

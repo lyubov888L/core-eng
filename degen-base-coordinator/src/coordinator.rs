@@ -25,7 +25,7 @@ use wsts::{
     taproot::SchnorrProof,
     v1, Point, Scalar,
 };
-use degen_base_signer::bitcoin_node::UTXO;
+use degen_base_signer::bitcoin_node::{BitcoinTransaction, UTXO};
 use degen_base_signer::signing_round::{DegensScriptRequest, VoteOutActorRequest};
 
 #[derive(thiserror::Error, Debug)]
@@ -385,6 +385,7 @@ where
         &self,
         nonce_responses: &[NonceResponse],
         msg: &[u8],
+        tx: &BitcoinTransaction,
     ) -> Result<(), Error> {
         let signature_share_request = SigShareRequestPox {
             dkg_id: self.current_dkg_id,
@@ -392,6 +393,7 @@ where
             correlation_id: 0,
             nonce_responses: nonce_responses.to_vec(),
             message: msg.to_vec(),
+            transaction: tx.clone(),
         };
 
         info!(
@@ -518,7 +520,7 @@ where
     }
 
     #[allow(non_snake_case)]
-    pub fn sign_pox_transaction(&mut self, msg: &[u8]) -> Result<(Signature, SchnorrProof), Error> {
+    pub fn sign_pox_transaction(&mut self, msg: &[u8], tx: &BitcoinTransaction) -> Result<(Signature, SchnorrProof), Error> {
         debug!("Attempting to Sign Message");
         if self.aggregate_public_key == Point::default() {
             return Err(Error::NoAggregatePublicKey);
@@ -559,7 +561,7 @@ where
         let nonce_responses: Vec<NonceResponse> = self.public_nonces.values().cloned().collect();
 
         // request signature shares
-        self.request_sigshares_pox(&nonce_responses, msg)?;
+        self.request_sigshares_pox(&nonce_responses, msg, tx)?;
         self.collect_sigshares_pox()?;
 
         let nonces = nonce_responses
