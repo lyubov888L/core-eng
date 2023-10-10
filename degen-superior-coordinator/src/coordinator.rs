@@ -384,25 +384,27 @@ impl StacksCoordinator {
 
         // Check for warnings and warn or propose for removal the actors
         for actor in bad_actors {
+            let mut nonce = self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap();
             let warnings_number = self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor).expect("Failed to get warnings for user");
             if warnings_number < 2 {
-                let tx = self.local_fee_wallet.stacks_wallet.warn_miner(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                let tx = self.local_fee_wallet.stacks_wallet.warn_miner(nonce, actor).unwrap();
                 self.local_stacks_node.broadcast_transaction(&tx).expect("Failed to broadcast warning transaction");
             }
             else {
-                let tx = self.local_fee_wallet.stacks_wallet.propose_removal(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                let tx = self.local_fee_wallet.stacks_wallet.propose_removal(nonce, actor).unwrap();
                 let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
 
                 match broadcasted {
                     Ok(()) => {
-                        to_be_voted_out.push(actor)
+                        to_be_voted_out.push(actor);
+                        nonce += 1;
                     }
                     Err(e) => {
                         info!("Failed to broadcast propose for removal transaction: {:?}", e)
                     }
                 }
 
-                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap(), actor).unwrap();
+                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(nonce, actor).unwrap();
                 let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
 
                 match broadcasted {

@@ -1133,7 +1133,7 @@ impl SigningRound {
         let script_1 = create_script_refund(&self.bitcoin_xonly_public_key, 100);
         let script_2 = create_script_unspendable();
 
-        let (tap_info, script_address) = create_tree(&secp, aggregate_x_only, &script_1, &script_2);
+        let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
