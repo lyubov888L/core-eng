@@ -29,6 +29,7 @@ use crate::peg_wallet::BitcoinWallet as BitcoinWalletTrait;
 use crate::stacks_node::client::NodeClient;
 use crate::stacks_node::StacksNode;
 use crate::stacks_wallet::StacksWallet;
+use crate::peg_wallet::StacksWallet as PegWallet;
 
 // import type Bitcoin PrivateKey
 // import type Bitcoin xOnlyPubKey and address
@@ -55,6 +56,8 @@ pub enum Error {
     InvalidConfigUrl(String),
     #[error("Invalid contract. {0}")]
     InvalidContract(String),
+    #[error("Invalid amount. {0}")]
+    AmountTooLow(String),
 }
 
 // status enum: "is-miner") || (ok "is-waiting") || (ok "is-pending") || (ok "is-none")))))
@@ -470,6 +473,12 @@ impl TryFrom<&RawConfig> for Config {
         let bitcoin_wallet = BitcoinWallet::new(bitcoin_xonly_public_key, bitcoin_network);
         let local_bitcoin_node = LocalhostBitcoinNode::new(bitcoin_node_rpc_url.clone());
         local_bitcoin_node.load_wallet(bitcoin_wallet.address()).unwrap();
+
+        let amount_to_pox = local_stacks_node.get_pool_total_spend_per_block(stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / local_stacks_node.get_miners_list(stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
+        if raw_config.amount_to_script < amount_to_pox {
+            return Err(Error::AmountTooLow(format!("The amount you specified is too low in order to send to PoX: {} < {}", raw_config.amount_to_script, amount_to_pox)));
+        }
+
         let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key).unwrap();
 
         Ok(Config::new(
