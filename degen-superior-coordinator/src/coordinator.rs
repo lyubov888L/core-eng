@@ -22,6 +22,7 @@ use std::{
 };
 use tracing::{debug, info, warn};
 use wsts::{common::Signature, field::Element, taproot::SchnorrProof, Point, Scalar};
+use blockstack_lib::vm::types::PrincipalData;
 
 use degen_base_signer::bitcoin_wallet::BitcoinWallet;
 use degen_base_signer::stacks_node::{self, Error as StacksNodeError};
@@ -328,9 +329,9 @@ impl StacksCoordinator {
         let mut good_actors = vec![];
         let mut impersonators_positions = vec![];
         let mut to_be_voted_out = vec![];
-        let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive miners list!");
-        let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive notifier!"));
-        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).expect("Failed to receive amount to script!") / all_miners.len() as u128;
+        let mut all_miners: Vec<StacksAddress> = self.local_stacks_node.get_miners_list(&self.local_fee_wallet.stacks_wallet.address()).unwrap_or(vec![self.local_fee_wallet.stacks_wallet.address().clone()]);
+        let coordinator = StacksAddress::from(self.local_stacks_node.get_notifier(&self.local_fee_wallet.stacks_wallet.address()).unwrap_or(PrincipalData::from(self.local_fee_wallet.stacks_wallet.address().clone())));
+        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).unwrap_or(0) / all_miners.len() as u128;
         let mut can_create_tx = true;
         all_miners.retain(|signer| signer != &coordinator);
 
@@ -382,38 +383,69 @@ impl StacksCoordinator {
             bad_actors.push(impersonator);
         }
 
+        // Make a temporary nonce in order to avoid ConflictingNonceInMempool errors
+        let mut nonce = self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap_or(0);
+
         // Check for warnings and warn or propose for removal the actors
         for actor in bad_actors {
-            let mut nonce = self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap();
-            let warnings_number = self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor).expect("Failed to get warnings for user");
-            if warnings_number < 2 {
-                let tx = self.local_fee_wallet.stacks_wallet.warn_miner(nonce, actor).unwrap();
-                self.local_stacks_node.broadcast_transaction(&tx).expect("Failed to broadcast warning transaction");
-            }
-            else {
-                let tx = self.local_fee_wallet.stacks_wallet.propose_removal(nonce, actor).unwrap();
-                let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
+            match self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor) {
+                Ok(warnings_number) => {
+                    if warnings_number < 2 {
+                        match self.local_fee_wallet.stacks_wallet.warn_miner(nonce, actor) {
+                            Ok(tx) => {
+                                match self.local_stacks_node.broadcast_transaction(&tx) {
+                                    Ok(()) => {
+                                        info!("Successfully warned {:?}.", &actor.to_string());
+                                        nonce += 1;
+                                    }
+                                    Err(e) => {
+                                        info!("Couldn't broadcast warning transaction for {:?}: {:?}", &actor.to_string(), e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                info!("Couldn't warn {:?}: {:?}", &actor.to_string(), e);
+                            }
+                        }
+                    } else {
+                        match self.local_fee_wallet.stacks_wallet.propose_removal(nonce, actor) {
+                            Ok(tx) => {
+                                match self.local_stacks_node.broadcast_transaction(&tx) {
+                                    Ok(()) => {
+                                        info!("Proposed {:?} for removal.", &actor.to_string());
+                                        to_be_voted_out.push(actor);
+                                        nonce += 1;
+                                    }
+                                    Err(e) => {
+                                        info!("Failed to broadcast propose for removal transaction for {:?}: {:?}", &actor.to_string(), e);
+                                    }
+                                }
 
-                match broadcasted {
-                    Ok(()) => {
-                        to_be_voted_out.push(actor);
-                        nonce += 1;
-                    }
-                    Err(e) => {
-                        info!("Failed to broadcast propose for removal transaction: {:?}", e)
+                                match self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(nonce, actor) {
+                                    Ok(tx) => {
+                                        match self.local_stacks_node.broadcast_transaction(&tx) {
+                                            Ok(()) => {
+                                                info!("Successfully voted out {:?}", &actor.to_string());
+                                                nonce += 1;
+                                            }
+                                            Err(e) => {
+                                                info!("Failed to broadcast vote positive removal transaction for {:?}: {:?}", &actor.to_string(), e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info!("Couldn't vote positive for kicking {:?} out of pool: {:?}", &actor.to_string(), e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                info!("Couldn't propose for removal {:?}: {:?}", &actor.to_string(), e)
+                            }
+                        }
                     }
                 }
-
-                let tx = self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(nonce, actor).unwrap();
-                let broadcasted = self.local_stacks_node.broadcast_transaction(&tx);
-
-                match broadcasted {
-                    Ok(()) => {
-                        info!("Successfully voted out {:?}", actor.to_string())
-                    }
-                    Err(e) => {
-                        info!("Failed to broadcast vote positive removal transaction: {:?}", e)
-                    }
+                Err(e) => {
+                    info!("Couldn't get warnings number for {:#?}: {:?}", &actor.to_string(), e);
                 }
             }
         }
@@ -432,11 +464,27 @@ impl StacksCoordinator {
                 1000,
                 self.local_stacks_node.get_pool_total_spend_per_block(self.local_fee_wallet.stacks_wallet.address()).unwrap_or(0) as u64,
             );
-            let signed_tx = self.sign_tx_from_script(utxos, tx).unwrap();
-            info!("{:#?}", signed_tx);
-            // let txid = self.local_bitcoin_node.broadcast_transaction(&signed_tx);
-            // info!("{txid:#?}");
+            match self.sign_tx_from_script(utxos, tx) {
+                Ok(signed_tx) => {
+                    info!("{:#?}", signed_tx);
+                    match self.local_bitcoin_node.broadcast_transaction(&signed_tx) {
+                        Ok(txid) => {
+                            info!("Successfully broadcasted transaction from scripts to PoX. Txid: {:?}", txid);
+                        }
+                        Err(e) => {
+                            info!("Couldn't broadcast the scripts to PoX transaction: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!("Couldn't sign transaction from scripts to PoX: {:?}", e);
+                }
+            }
         }
+        else {
+            info!("There was a bad actor in the pool, transaction creation aborted.")
+        }
+
         Ok(0)
     }
 }

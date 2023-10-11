@@ -775,18 +775,31 @@ impl StacksNode for NodeClient {
         sender: &StacksAddress,
         address: &StacksAddress
     ) -> Result<bool, StacksNodeError> {
-        let function_name = "check-is-proposed-for-removal-now";
+        let function_name = "get-proposed-removal-list";
 
-        let is_proposed_for_removal_hex = self.call_read(sender, function_name, &[("0x".to_owned() + &(hex::encode(ClarityValue::Principal(PrincipalData::from(*address)).serialize_to_vec()))).as_str()])?;
-        let is_proposed_for_removal_value =  ClarityValue::try_deserialize_hex_untyped(&is_proposed_for_removal_hex)?;
-        if let ClarityValue::Bool(is_proposed_for_removal) = is_proposed_for_removal_value {
-            Ok(is_proposed_for_removal)
+        let mut proposed_for_removal_list:Vec<StacksAddress> = Vec::new();
+        let proposed_removal_list_hex = self.call_read(sender, function_name, &[])?;
+        let proposed_for_removal_data = ClarityValue::try_deserialize_hex_untyped(&proposed_removal_list_hex)?;
+
+        if let ClarityValue::Sequence(SequenceData::List(proposed_for_removal_clarity)) = proposed_for_removal_data.clone() {
+            for proposed_miner in proposed_for_removal_clarity.data {
+                if let ClarityValue::Principal(proposed_address) = proposed_miner {
+                    proposed_for_removal_list.push(StacksAddress::from(proposed_address));
+                } else {
+                    return Err(StacksNodeError::MalformedClarityValue(
+                        function_name.to_string(),
+                        proposed_for_removal_data
+                    ));
+                }
+            }
         } else {
-            Err(StacksNodeError::MalformedClarityValue(
+            return Err(StacksNodeError::MalformedClarityValue(
                 function_name.to_string(),
-                is_proposed_for_removal_value,
-            ))
+                proposed_for_removal_data,
+            ));
         }
+
+        return Ok(proposed_for_removal_list.contains(address))
     }
 }
 

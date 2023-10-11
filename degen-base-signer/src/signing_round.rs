@@ -24,7 +24,7 @@ use blockstack_lib::chainstate::burn::operations::PegOutRequestOp;
 use blockstack_lib::chainstate::burn::Opcodes;
 use blockstack_lib::chainstate::stacks::address::PoxAddress;
 use bitcoin::util::address::Address;
-use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
+use blockstack_lib::chainstate::stacks::{StacksPrivateKey, StacksTransaction, TransactionVersion};
 use blockstack_lib::types::chainstate::{BurnchainHeaderHash, StacksAddress};
 use blockstack_lib::util::hash::{Hash160, Sha256Sum};
 use blockstack_lib::vm::ContractName;
@@ -71,8 +71,7 @@ use crate::{
     state_machine::{Error as StateMachineError, StateMachine, States},
     util::{decrypt, encrypt, make_shared_secret},
 };
-use crate::signing_round::Error::UTXOAmount;
-use crate::signing_round::UtxoError::InvalidUTXO;
+use crate::signing_round::UtxoError::{InvalidUTXO, UTXOAmount};
 use crate::stacks_node::StacksNode;
 use blockstack_lib::burnchains::Address as BitcoinAddressTrait;
 
@@ -94,14 +93,14 @@ pub enum Error {
     SigningError(#[from] SighashError),
     #[error("The amount you're sending is smaller than the fee")]
     FeeError,
-    #[error("UTXO amount too low")]
-    UTXOAmount,
 }
 
 #[derive(thiserror::Error, Debug, Clone, Serialize, Deserialize)]
 pub enum UtxoError {
     #[error("Invalid UTXO.")]
     InvalidUTXO,
+    #[error("UTXO amount too low")]
+    UTXOAmount,
 }
 
 pub trait Signable {
@@ -1117,34 +1116,48 @@ impl SigningRound {
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut node_clone = self.local_stacks_node.clone();
         let mut wallet_clone = self.stacks_wallet.clone();
+        let mut nonce = self.local_stacks_node.next_nonce(&self.stacks_wallet.address()).unwrap_or(0);
 
         thread::spawn(move || {
             let mut actors_to_be_voted_out = vote_out_request.actors_to_be_voted_out.clone();
             loop {
                 for actor in actors_to_be_voted_out.clone() {
-                    match node_clone.clone().is_proposed_for_removal(wallet_clone.address(), &actor) {
-                        Ok(value) => {
-                            if value == true {
-                                let tx = wallet_clone.vote_positive_remove_request(node_clone.clone().next_nonce(wallet_clone.address()).unwrap(), actor).unwrap();
-                                let broadcasted = node_clone.broadcast_transaction(&tx);
-                                match broadcasted {
-                                    Ok(()) => {
-                                        info!("Successfully voted out {:?}", actor.to_string());
-                                        actors_to_be_voted_out.retain(|user| user != &actor);
-
-                                        // If the actor has the code running, panic for him in order to stop receiving signals from coordinator
-                                        if wallet_clone.address() == &actor {
-                                            panic!("You got kicked out of pool!");
+                    match node_clone.clone().get_miners_list(wallet_clone.address()) {
+                        Ok(miners_list) => {
+                            if miners_list.contains(&actor) {
+                                match node_clone.clone().is_proposed_for_removal(wallet_clone.address(), &actor) {
+                                    Ok(value) => {
+                                        if value == true {
+                                            match wallet_clone.vote_positive_remove_request(nonce, actor) {
+                                                Ok(tx) => {
+                                                    match node_clone.broadcast_transaction(&tx) {
+                                                        Ok(()) => {
+                                                            info!("Successfully voted out {:?}", actor.to_string());
+                                                            actors_to_be_voted_out.retain(|user| user != &actor);
+                                                            nonce += 1;
+                                                        }
+                                                        Err(e) => {
+                                                            info!("Error broadcasting the voting out transaction for {:?}: {:?}", actor.to_string(), e);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    info!("Couldn't make vote out transaction for {:?}: {:?}", &actor.to_string(), e);
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
-                                        info!("Failed voting {:?} out: {:?}", actor.to_string(), e)
+                                        info!("Could not check if {:?} is proposed for removal.", actor.to_string());
                                     }
                                 }
                             }
+                            else {
+                                actors_to_be_voted_out.retain(|user| user != &actor);
+                            }
                         }
                         Err(e) => {
-                            info!("Could not check if {:?} is proposed for removal.", actor.to_string());
+                            info!("Couldn't get miner's list: {:?}", e)
                         }
                     }
                 }
@@ -1175,23 +1188,39 @@ impl SigningRound {
         // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
         let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
 
-        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
+        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_address]).len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
         let user_to_script_fee: u64 = 300;
 
-        let mut script_utxo: Result<UTXO, UtxoError> = Ok(UTXO::default());
+        let mut script_utxo: Result<UTXO, UtxoError> = Err(InvalidUTXO);
         let mut script_address_needs_funds = true;
 
-        let imported_addresses = self.local_bitcoin_node.list_descriptors().unwrap();
+        let imported_addresses = self.local_bitcoin_node.list_descriptors().unwrap_or(vec![]);
 
         if imported_addresses.contains(&script_address) == false {
-            sleep(Duration::from_secs((self.signer.signer_id * 2) as u64));
-            self.local_bitcoin_node
-                .load_wallet(&script_address)
-                .unwrap();
+            let mut number_of_iterations = 0;
+            loop {
+                match self.local_bitcoin_node.load_wallet(&script_address) {
+                    Ok(()) => {
+                        break
+                    }
+                    Err(e) => {
+                        if number_of_iterations % 10 == 0 {
+                            info!("Couldn't load script address: {:?}", e)
+                        }
+                        // How many times to try loading the script address
+                        if number_of_iterations == 100 {
+                            break
+                        }
+                    }
+                }
+                number_of_iterations += 1;
+                sleep(Duration::from_secs((1)));
+            }
         }
 
-        let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).expect("Failed to retreive UTXOs for script address.");
+        let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]);
+        let mut run_refund_phase = false;
 
         for utxo in script_utxos.clone() {
             if amount_to_pox <= utxo.amount {
@@ -1199,7 +1228,22 @@ impl SigningRound {
                 script_address_needs_funds = false;
             }
             else {
-                let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), user_to_script_fee).unwrap();
+                script_utxo = Err(InvalidUTXO);
+                run_refund_phase = true;
+            }
+        }
+
+        if run_refund_phase {
+            let mut amount_to_refund: u64 = 0;
+
+            for utxo in &script_utxos {
+                amount_to_refund += utxo.amount;
+            }
+
+            if amount_to_refund > user_to_script_fee {
+                amount_to_refund -= user_to_script_fee;
+
+                let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), amount_to_refund);
 
                 let mut txout_vec: Vec<TxOut> = vec![];
                 script_utxos.iter().for_each(|utxo| {
@@ -1211,9 +1255,17 @@ impl SigningRound {
 
                 let signed_refund_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, &tap_info);
 
-                self.local_bitcoin_node.broadcast_transaction(&signed_refund_tx).unwrap();
-
-                script_utxo = Err(InvalidUTXO);
+                match self.local_bitcoin_node.broadcast_transaction(&signed_refund_tx) {
+                    Ok(txid) => {
+                        info!("Succesfully refunded money. Txid: {:?}", txid)
+                    }
+                    Err(e) => {
+                        info!("Couldn't broadcast refund transaction: {:?}", e)
+                    }
+                };
+            }
+            else {
+                info!("You don't have enough money to refund from script address!")
             }
         }
 
@@ -1223,7 +1275,7 @@ impl SigningRound {
             let mut unspent_list_signer = self
                 .local_bitcoin_node
                 .list_unspent(&self.bitcoin_wallet.address())
-                .expect("Failed to get unspent list for signer.");
+                .unwrap_or(vec![]);
 
             let mut valid_utxos = vec![];
             let mut total_amount: u64 = 0;
@@ -1231,7 +1283,11 @@ impl SigningRound {
             // This works, but we have no confirmations because of the node not mining blocks
             // Switch back to it once the issue is fixed
             // unspent_list_signer.sort_by(|a, b| b.confirmations.partial_cmp(&a.confirmations).unwrap());
-            unspent_list_signer.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
+
+            if &unspent_list_signer.len() > &2 {
+                unspent_list_signer.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
+            }
+
             for utxo in unspent_list_signer.clone() {
                 if total_amount < amount_to_script + user_to_script_fee {
                     total_amount += utxo.amount;
@@ -1242,42 +1298,55 @@ impl SigningRound {
             }
 
             if total_amount < amount_to_script + user_to_script_fee {
-                return Err(UTXOAmount);
+                info!("You don't have enough money to fund the script!");
+                script_utxo = Err(UTXOAmount);
             }
-
-            let mut unspent_list_txout: Vec<TxOut> = vec![];
-            valid_utxos.iter().for_each(|utxo| {
-                unspent_list_txout.push(TxOut {
-                    value: utxo.amount,
-                    script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+            else {
+                let mut unspent_list_txout: Vec<TxOut> = vec![];
+                valid_utxos.iter().for_each(|utxo| {
+                    unspent_list_txout.push(TxOut {
+                        value: utxo.amount,
+                        script_pubkey: Script::from_str(utxo.scriptPubKey.as_str()).unwrap(),
+                    });
                 });
-            });
 
-            let prevouts_signer = Prevouts::All(unspent_list_txout.as_slice());
+                let prevouts_signer = Prevouts::All(unspent_list_txout.as_slice());
 
-            let user_to_script_unsigned = create_tx_from_user_to_script(
-                &valid_utxos,
-                &self.bitcoin_wallet.address(),
-                &script_address,
-                amount_to_script,
-                user_to_script_fee,
-            );
+                let user_to_script_unsigned = create_tx_from_user_to_script(
+                    &valid_utxos,
+                    &self.bitcoin_wallet.address(),
+                    &script_address,
+                    amount_to_script,
+                    user_to_script_fee,
+                );
 
-            let user_to_script_signed =
-                sign_tx_user_to_script(&secp, &user_to_script_unsigned, &prevouts_signer, &keypair);
+                let user_to_script_signed =
+                    sign_tx_user_to_script(&secp, &user_to_script_unsigned, &prevouts_signer, &keypair);
 
-            self.local_bitcoin_node
-                .broadcast_transaction(&user_to_script_signed)
-                .unwrap();
+                match self.local_bitcoin_node.broadcast_transaction(&user_to_script_signed) {
+                    Ok(txid) => {
+                        info!("Succesfully funded script. Txid: {:?}", txid)
+                    }
+                    Err(e) => {
+                        info!("Couldn't broadcast fund script transaction: {:?}", e)
+                    }
+                };
 
-            for utxo in self.local_bitcoin_node.list_unspent(&script_address).expect("Failed to retreive UTXOs for script address.") {
-                if amount_to_pox <= utxo.amount {
-                    script_utxo = Ok(utxo);
-                }
-                else {
-                    script_utxo = Err(InvalidUTXO);
+                for utxo in self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]) {
+                    if amount_to_pox <= utxo.amount {
+                        script_utxo = Ok(utxo);
+                    } else {
+                        script_utxo = Err(InvalidUTXO);
+                    }
                 }
             }
+        }
+
+        if script_utxo.is_err() {
+            info!("Couldn't get any valid transaction from script!");
+        }
+        else {
+            info!("Found a good UTXO from script!");
         }
 
         let mut msgs = vec![];

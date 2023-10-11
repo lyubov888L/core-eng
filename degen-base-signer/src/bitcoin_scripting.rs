@@ -89,20 +89,35 @@ pub fn create_tx_from_user_to_script (
 
     let amount_back_to_user = total_utxo_amount - amount - fee;
 
-    Transaction {
-        version: 2,
-        lock_time: PackedLockTime(0),
-        input: inputs,
-        output: vec![
-            TxOut {
-                value: amount - fee,
-                script_pubkey: script_address.script_pubkey(),
-            },
-            TxOut {
-                value: amount_back_to_user,
-                script_pubkey: user_address.script_pubkey(),
-            }
-        ],
+    if amount_back_to_user != 0 {
+        Transaction {
+            version: 2,
+            lock_time: PackedLockTime(0),
+            input: inputs,
+            output: vec![
+                TxOut {
+                    value: amount - fee,
+                    script_pubkey: script_address.script_pubkey(),
+                },
+                TxOut {
+                    value: amount_back_to_user,
+                    script_pubkey: user_address.script_pubkey(),
+                }
+            ],
+        }
+    }
+    else {
+        Transaction {
+            version: 2,
+            lock_time: PackedLockTime(0),
+            input: inputs,
+            output: vec![
+                TxOut {
+                    value: amount - fee,
+                    script_pubkey: script_address.script_pubkey(),
+                }
+            ],
+        }
     }
 }
 
@@ -247,18 +262,15 @@ fn verify_p2tr_commitment(
 pub fn create_refund_tx(
     utxos: &Vec<UTXO>,
     user_address: &Address,
-    fee: u64,
-) -> Result<Transaction, Error> {
+    amount: u64,
+) -> Transaction {
     let mut inputs = vec![];
-    let mut amount: u64 = 0;
 
     for utxo in utxos {
         let prev_output_txid_string = &utxo.txid;
         let prev_output_txid = Txid::from_str(prev_output_txid_string.as_str()).unwrap();
         let prev_output_vout = utxo.vout.clone();
         let outpoint = OutPoint::new(prev_output_txid, prev_output_vout);
-
-        amount += utxo.amount;
 
         inputs.push(
             TxIn {
@@ -270,14 +282,7 @@ pub fn create_refund_tx(
         )
     }
 
-    if amount <= fee {
-        return Err(Error::FeeError);
-    }
-    else {
-        amount -= fee;
-    }
-
-    Ok(Transaction {
+    Transaction {
         version: 2,
         lock_time: PackedLockTime(100),
         input: inputs,
@@ -287,5 +292,5 @@ pub fn create_refund_tx(
                 script_pubkey: user_address.script_pubkey(),
             },
         ],
-    })
+    }
 }
