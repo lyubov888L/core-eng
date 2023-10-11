@@ -1,4 +1,5 @@
 use bdk::miniscript::psbt::SighashError;
+use chrono::Local;
 use bitcoin::blockdata::opcodes::all;
 use bitcoin::blockdata::script::Builder;
 use bitcoin::consensus::serialize;
@@ -53,7 +54,7 @@ use wsts::{
     traits::Signer as SignerTrait,
     v1,
 };
-
+use std::io::Write;
 use crate::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode, UTXO};
 use crate::bitcoin_scripting::{
     create_refund_tx, create_script_refund, create_script_unspendable, create_tree,
@@ -95,8 +96,6 @@ pub enum Error {
     FeeError,
     #[error("UTXO amount too low")]
     UTXOAmount,
-    #[error("The transaction to pox had invalid amount and/or pox addresses")]
-    InvalidTransaction,
 }
 
 #[derive(thiserror::Error, Debug, Clone, Serialize, Deserialize)]
@@ -883,7 +882,8 @@ impl SigningRound {
         sign_request: SigShareRequestPox,
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut msgs = vec![];
-        let transaction_outputs = sign_request.transaction.output;
+        let transaction_clone = sign_request.transaction;
+        let transaction_outputs = &transaction_clone.output;
         let mut pox_addresses = vec![
             Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
             Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
@@ -953,12 +953,51 @@ impl SigningRound {
                     debug!("SigShareRequestPox for {} dropped.", signer_id);
                 }
             }
-            Ok(msgs)
         }
         else {
-            info!("The transaction did not contain the correct addresses or amount");
-            Err(Error::InvalidTransaction)
+            if pox_addresses.len() == 0 {
+                info!("The transaction did not contain the correct amount!");
+            }
+            else if pox_amount == pox_sc_amount {
+                info!("The transaction did not contain the correct PoX addresses!");
+            }
+            let log_directory = std::path::Path::new("../degen-base-signer/logs/");
+
+            if !log_directory.exists() {
+                if let Err(e) = std::fs::create_dir_all(&log_directory) {
+                    info!("Failed to create directory: {:?}", e);
+                }
+            }
+
+            let file_path = log_directory.join(format!("malicious_coordinator_signer_{:?}.txt", self.signer.signer_id));
+
+            let formatted_date_time = Local::now().format("%d-%m-%Y - %H:%M:%S").to_string();
+
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path) {
+                Ok(mut file) => {
+                    let log_message = format!("\
+                    Date and time: {:?}\n\
+                    Block height: {:#?}\n\
+                    {:#?}\n\n\
+                    ============================================\n\n", formatted_date_time, get_current_block_height(&self.local_bitcoin_node.clone()), transaction_clone);
+
+                    if let Err(e) = file.write_all(log_message.as_bytes()) {
+                        info!("Couldn't write to file: {:?}", e)
+                    }
+
+                    if let Err(e) = file.flush() {
+                        info!("Couldn't flush the file: {:?}", e)
+                    }
+                }
+                Err(e) => {
+                    info!("Couldn't create log file: {:?}", e);
+                }
+            }
         }
+        Ok(msgs)
     }
 
     fn dkg_begin(&mut self, dkg_begin: DkgBegin) -> Result<Vec<MessageTypes>, Error> {
@@ -1133,6 +1172,7 @@ impl SigningRound {
         let script_1 = create_script_refund(&self.bitcoin_xonly_public_key, 100);
         let script_2 = create_script_unspendable();
 
+        // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
         let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
