@@ -1177,7 +1177,7 @@ impl SigningRound {
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
-        let fee: u64 = 300;
+        let user_to_script_fee: u64 = 300;
 
         let mut script_utxo: Result<UTXO, UtxoError> = Ok(UTXO::default());
         let mut script_address_needs_funds = true;
@@ -1199,7 +1199,7 @@ impl SigningRound {
                 script_address_needs_funds = false;
             }
             else {
-                let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), fee).unwrap();
+                let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), user_to_script_fee).unwrap();
 
                 let mut txout_vec: Vec<TxOut> = vec![];
                 script_utxos.iter().for_each(|utxo| {
@@ -1233,7 +1233,7 @@ impl SigningRound {
             // unspent_list_signer.sort_by(|a, b| b.confirmations.partial_cmp(&a.confirmations).unwrap());
             unspent_list_signer.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
             for utxo in unspent_list_signer.clone() {
-                if total_amount < amount_to_script + fee {
+                if total_amount < amount_to_script + user_to_script_fee {
                     total_amount += utxo.amount;
                     valid_utxos.push(utxo);
                     continue
@@ -1241,7 +1241,7 @@ impl SigningRound {
                 break
             }
 
-            if total_amount < amount_to_script + fee {
+            if total_amount < amount_to_script + user_to_script_fee {
                 return Err(UTXOAmount);
             }
 
@@ -1260,7 +1260,7 @@ impl SigningRound {
                 &self.bitcoin_wallet.address(),
                 &script_address,
                 amount_to_script,
-                fee,
+                user_to_script_fee,
             );
 
             let user_to_script_signed =
@@ -1271,7 +1271,7 @@ impl SigningRound {
                 .unwrap();
 
             for utxo in self.local_bitcoin_node.list_unspent(&script_address).expect("Failed to retreive UTXOs for script address.") {
-                if amount_to_pox > utxo.amount {
+                if amount_to_pox <= utxo.amount {
                     script_utxo = Ok(utxo);
                 }
                 else {
