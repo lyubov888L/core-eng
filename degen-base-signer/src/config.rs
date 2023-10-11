@@ -14,7 +14,7 @@ use bitcoin::{KeyPair, XOnlyPublicKey};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use blockstack_lib::address::AddressHashMode;
 use blockstack_lib::burnchains::Address;
-use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
+use blockstack_lib::chainstate::stacks::{StacksPrivateKey, StacksTransaction, TransactionVersion};
 use blockstack_lib::types::chainstate::{StacksAddress, StacksPublicKey};
 use blockstack_lib::vm::ContractName;
 use blockstack_lib::vm::types::PrincipalData;
@@ -68,6 +68,7 @@ pub enum MinerStatus {
     Pending,
     Waiting,
     NormalUser,
+    NoStatus,
 }
 
 #[derive(Parser)]
@@ -330,13 +331,15 @@ fn operate_address_status_non_miner(
     stacks_node: &mut NodeClient,
     stacks_address: &StacksAddress,
     bitcoin_pubkey: &XOnlyPublicKey,
-) -> Result<MinerStatus, Error> {
-    let mut current_status = stacks_node.get_status(stacks_address).unwrap();
+) -> MinerStatus {
+    let mut current_status = stacks_node.get_status(stacks_address).unwrap_or(MinerStatus::NoStatus);
 
     // TODO: degens - delete these after querying for mempool done
     let mut not_in_waiting_mempool = true;
     let mut not_in_pending_mempool = true;
     let mut not_in_mempool_to_be_miner = true;
+
+    let mut nonce = stacks_node.next_nonce(stacks_address).unwrap_or(0);
 
     // hashbytes for the bitcoin p2pkh address
     // types.tuple({
@@ -348,54 +351,84 @@ fn operate_address_status_non_miner(
         match current_status {
             MinerStatus::NormalUser => {
                 // TODO: degens - query the mempool
-                // let not_in_mempool = true;
-
                 if not_in_waiting_mempool {
-                    let tx = stacks_wallet.ask_to_join(stacks_node.next_nonce(stacks_address).unwrap(), bitcoin_pubkey.serialize().to_vec().clone()).unwrap();
-                    info!("The tx for ask-to-join: {:#?}", tx);
-                    info!("{:?}", stacks_node.broadcast_transaction(&tx));
-                    not_in_waiting_mempool = false;
+                    match stacks_wallet.ask_to_join(nonce, bitcoin_pubkey.serialize().to_vec().clone())
+                    {
+                        Ok(tx) => {
+                            match stacks_node.broadcast_transaction(&tx) {
+                                Ok(()) => {
+                                    info!("The tx for ask-to-join: {:#?}", tx);
+                                    not_in_waiting_mempool = false;
+                                    nonce += 1;
+                                }
+                                Err(e) => {
+                                    info!("Failed to broadcast ask-to-jon transaction: {:?}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("Failed to constuct ask-to-join transaction: {:?}", e);
+                        }
+                    }
                 }
             }
             MinerStatus::Waiting => {
-                // verify number of threshold met
-                let enough_voted = stacks_node.is_enough_voted_to_enter(stacks_address).unwrap();
+                let enough_voted = stacks_node.is_enough_voted_to_enter(stacks_address).unwrap_or(false);
                 if enough_voted {
-                    // also query mempool
-                    // let not_in_mempool = false;
-
                     if not_in_pending_mempool {
-                        let tx = stacks_wallet.call_try_enter(stacks_node.next_nonce(stacks_address).unwrap()).unwrap();
-                        info!("The tx for try-enter: {:#?}", tx);
-                        info!("{:?}", stacks_node.broadcast_transaction(&tx));
-                        not_in_pending_mempool = false;
+                        match stacks_wallet.call_try_enter(nonce) {
+                            Ok(tx) => {
+                                match stacks_node.broadcast_transaction(&tx) {
+                                    Ok(()) => {
+                                        info!("The tx for try-enter: {:#?}", tx);
+                                        not_in_pending_mempool = false;
+                                        nonce += 1;
+                                    }
+                                    Err(e) => {
+                                        info!("Failed to broadcast try-enter transaction: {:?}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                info!("Failed to constuct try-enter transaction: {:?}", e);
+                            }
+                        }
                     }
                 }
             }
             MinerStatus::Pending => {
-                // verify enough blocks passed
-                let enough_blocks_passed = stacks_node.is_enough_blocks_passed_for_pending_miners(stacks_address).unwrap();
+                let enough_blocks_passed = stacks_node.is_enough_blocks_passed_for_pending_miners(stacks_address).unwrap_or(false);
                 if enough_blocks_passed {
-                    // also query mempool ( if anyone called this function in the last n blocks )
-                    // let not_in_mempool = false;
-
                     if not_in_mempool_to_be_miner {
-                        // if not anywhere, make call add-pending-miners-to-pool
-                        let tx = stacks_wallet.add_pending_miners_to_pool(stacks_node.next_nonce(stacks_address).unwrap()).unwrap();
-                        info!("The tx for add-pending-miners-to-pool: {:#?}", tx);
-                        info!("{:?}", stacks_node.broadcast_transaction(&tx));
-                        not_in_mempool_to_be_miner = false;
+                        match stacks_wallet.add_pending_miners_to_pool(nonce) {
+                            Ok(tx) => {
+                                match stacks_node.broadcast_transaction(&tx) {
+                                    Ok(()) => {
+                                        info!("The tx for add-pending-miners-to-pool: {:#?}", tx);
+                                        not_in_mempool_to_be_miner = false;
+                                        nonce += 1;
+                                    }
+                                    Err(e) => {
+                                        info!("Failed to broadcast add-pending-miners-to-pool transaction: {:?}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                info!("Failed to constuct add-pending-miners-to-pool transaction: {:?}", e);
+                            }
+                        }
                     }
                 }
             }
             MinerStatus::Miner => {
                 break
             }
+            MinerStatus::NoStatus => {}
         }
         sleep(time::Duration::from_secs(60));
-        current_status = stacks_node.get_status(stacks_address).unwrap();
+        current_status = stacks_node.get_status(stacks_address).unwrap_or(MinerStatus::NoStatus);
     }
-    Ok(current_status)
+    current_status
 }
 
 
@@ -431,11 +464,13 @@ impl TryFrom<&RawConfig> for Config {
 
         let mut stacks_node_clone = local_stacks_node.clone();
         let mut stacks_wallet_clone = stacks_wallet.clone();
+        let mut nonce = local_stacks_node.next_nonce(&stacks_address).unwrap_or(0);
+
         thread::spawn(move || {
             loop {
                 match stacks_node_clone.is_auto_exchange(&stacks_address) {
                     Ok(auto_exchange) => {
-                        if auto_exchange == true && stacks_node_clone.get_user_balance(&stacks_address).unwrap() > 1000 * 1000000 {
+                        if auto_exchange == true && stacks_node_clone.get_user_balance(&stacks_address).unwrap_or(0) > 1000 * 1000000 {
                             // TODO: degens - build the auto-exchange flow
                         }
                     }
@@ -444,25 +479,35 @@ impl TryFrom<&RawConfig> for Config {
                     }
                 }
 
-                let waiting_list = stacks_node_clone.get_waiting_list(&stacks_address).unwrap();
+                let waiting_list = stacks_node_clone.get_waiting_list(&stacks_address).unwrap_or(vec![]);
 
                 for waiting_miner in waiting_list {
-                    match stacks_node_clone.is_blacklisted(&stacks_address, &waiting_miner).unwrap() {
-                        true => {
-                            info!("{:#?} is blacklisted, skipping.", &waiting_miner.to_string())
-                        }
-                        false => {
-                            let tx = stacks_wallet_clone.vote_positive_join_request(stacks_node_clone.next_nonce(&stacks_address).unwrap(), waiting_miner).unwrap();
-                            let broadcasted = stacks_node_clone.broadcast_transaction(&tx);
-
-                            match broadcasted {
-                                Ok(()) => {
-                                    info!("Voted to accept {:#?} in pool.", &waiting_miner.to_string())
-                                }
-                                Err(e) => {
-                                    info!("Couldn't accept miner in pool: {:#?}", e)
+                    match stacks_node_clone.is_blacklisted(&stacks_address, &waiting_miner) {
+                        Ok(is_blacklisted) => {
+                            if is_blacklisted {
+                                info!("{:#?} is blacklisted, skipping.", &waiting_miner.to_string())
+                            }
+                            else {
+                                match stacks_wallet_clone.vote_positive_join_request(nonce, waiting_miner) {
+                                    Ok(tx) => {
+                                        match stacks_node_clone.broadcast_transaction(&tx) {
+                                            Ok(()) => {
+                                                info!("Voted to accept {:#?} in pool.", &waiting_miner.to_string());
+                                                nonce += 1;
+                                            }
+                                            Err(e) => {
+                                                info!("Couldn't accept miner in pool: {:#?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info!("Error creating vote-positive-join-request transaction: {:?}", e);
+                                    }
                                 }
                             }
+                        }
+                        Err(e) => {
+                            info!("Error retreiving value for is-blacklisted: {:?}", e);
                         }
                     }
                 }
@@ -473,14 +518,16 @@ impl TryFrom<&RawConfig> for Config {
 
         let bitcoin_wallet = BitcoinWallet::new(bitcoin_xonly_public_key, bitcoin_network);
         let local_bitcoin_node = LocalhostBitcoinNode::new(bitcoin_node_rpc_url.clone());
-        local_bitcoin_node.load_wallet(bitcoin_wallet.address()).unwrap();
+        if let Err(e) = local_bitcoin_node.load_wallet(bitcoin_wallet.address()) {
+            info!("Couldn't load script address: {:?}", e)
+        }
 
-        let amount_to_pox = local_stacks_node.get_pool_total_spend_per_block(stacks_wallet.address()).expect("Failed to retreive amount to pox") as u64 / local_stacks_node.get_miners_list(stacks_wallet.address()).expect("Failed to receive miners list!").len() as u64;
+        let amount_to_pox = local_stacks_node.get_pool_total_spend_per_block(stacks_wallet.address()).unwrap_or(0) as u64 / local_stacks_node.get_miners_list(stacks_wallet.address()).unwrap_or(vec![stacks_wallet.address().clone()]).len() as u64;
         if raw_config.amount_to_script < amount_to_pox {
             return Err(Error::AmountTooLow(format!("The amount you specified is too low in order to send to PoX: {} < {}", raw_config.amount_to_script, amount_to_pox)));
         }
 
-        let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key).unwrap();
+        let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key);
 
         Ok(Config::new(
             mining_name,
