@@ -461,6 +461,8 @@ impl TryFrom<&RawConfig> for Config {
             stacks_version,
             raw_config.transaction_fee.clone(),
         );
+        
+        let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key);
 
         let mut stacks_node_clone = local_stacks_node.clone();
         let mut stacks_wallet_clone = stacks_wallet.clone();
@@ -526,8 +528,6 @@ impl TryFrom<&RawConfig> for Config {
         if raw_config.amount_to_script < amount_to_pox {
             return Err(Error::AmountTooLow(format!("The amount you specified is too low in order to send to PoX: {} < {}", raw_config.amount_to_script, amount_to_pox)));
         }
-
-        let status = operate_address_status_non_miner(&stacks_wallet, &mut local_stacks_node, &stacks_address, &bitcoin_xonly_public_key);
 
         Ok(Config::new(
             mining_name,
