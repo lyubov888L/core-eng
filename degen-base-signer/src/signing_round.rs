@@ -881,13 +881,28 @@ impl SigningRound {
         sign_request: SigShareRequestPox,
     ) -> Result<Vec<MessageTypes>, Error> {
         let mut msgs = vec![];
+
+        let secp = Secp256k1::new();
+        let keypair = KeyPair::from_secret_key(&secp, &self.bitcoin_private_key);
+
+        // let aggregate_compressed = degens_create_script.aggregate_public_key.compress();
+        // let aggregate_x_only = PublicKey::from_slice(aggregate_compressed.as_bytes()).unwrap().to_x_only_pubkey();
+
+        let script_1 = create_script_refund(&self.bitcoin_xonly_public_key, 100);
+        let script_2 = create_script_unspendable();
+
+        // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
+        let (_, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
+
         let transaction_clone = sign_request.transaction;
         let transaction_outputs = &transaction_clone.output;
+        let transaction_inputs = &transaction_clone.input;
+
         let mut pox_addresses = vec![
             Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
             Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
         ];
-        let mut pox_amount: u64 = 0;
+        let mut pox_total_amount: u64 = 0;
         let pox_sc_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
 
         transaction_outputs.iter().for_each(|output| {
@@ -895,7 +910,7 @@ impl SigningRound {
                 Ok(address) => {
                     if pox_addresses.clone().contains(&address) {
                         pox_addresses.retain(|user| user != &address);
-                        pox_amount = pox_amount + output.value;
+                        pox_total_amount = pox_total_amount + output.value;
                     }
                 }
                 Err(e) => {
@@ -904,7 +919,36 @@ impl SigningRound {
             }
         });
 
-        if pox_addresses.len() == 0 && pox_amount == pox_sc_amount {
+        let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]);
+        let number_of_signers = transaction_inputs.len() as u64;
+        let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
+        let fee = 1000;
+        let mut found_utxo_in_inputs = false;
+        let mut found_correct_output = false;
+
+        for utxo in script_utxos {
+            let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+
+            for input in transaction_inputs {
+                if input.previous_output.txid.to_string() == utxo.txid && input.previous_output.vout == utxo.vout {
+                    found_utxo_in_inputs = true;
+                    break
+                }
+            }
+
+            for output in transaction_outputs {
+                if Script::from_str(&utxo.scriptPubKey).unwrap_or(Script::new()).eq(&output.script_pubkey) && amount_back == output.value {
+                    found_correct_output = true;
+                    break
+                }
+            }
+
+            if found_correct_output && found_utxo_in_inputs {
+                break
+            }
+        }
+
+        if pox_addresses.len() == 0 && pox_total_amount == pox_sc_amount && found_correct_output && found_utxo_in_inputs {
             let signer_ids = sign_request
                 .nonce_responses
                 .iter()
@@ -954,12 +998,23 @@ impl SigningRound {
             }
         }
         else {
-            if pox_addresses.len() == 0 {
-                info!("The transaction did not contain the correct amount!");
+            let mut cause = "";
+
+            if pox_addresses.len() != 0 {
+                cause = "The transaction did not contain the correct PoX addresses!"
             }
-            else if pox_amount == pox_sc_amount {
-                info!("The transaction did not contain the correct PoX addresses!");
+            else if pox_total_amount != pox_sc_amount {
+                cause = "The transaction did not contain the correct amount!"
             }
+            else if !found_correct_output {
+                cause = "Could not find a good output back to your script in the transaction!"
+            }
+            else if !found_utxo_in_inputs {
+                cause = "Could not find your script's UTXO as input in the transaction!"
+            }
+
+            info!("The signing failed: {:?}", cause);
+
             let log_directory = std::path::Path::new("../degen-base-signer/logs/");
 
             if !log_directory.exists() {
@@ -979,9 +1034,10 @@ impl SigningRound {
                 Ok(mut file) => {
                     let log_message = format!("\
                     Date and time: {:?}\n\
+                    Cause: {:#?}\n\
                     Block height: {:#?}\n\
                     {:#?}\n\n\
-                    ============================================\n\n", formatted_date_time, get_current_block_height(&self.local_bitcoin_node.clone()), transaction_clone);
+                    ============================================\n\n", formatted_date_time, cause, get_current_block_height(&self.local_bitcoin_node.clone()), transaction_clone);
 
                     if let Err(e) = file.write_all(log_message.as_bytes()) {
                         info!("Couldn't write to file: {:?}", e)

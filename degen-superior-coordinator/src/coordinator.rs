@@ -501,7 +501,7 @@ fn create_tx_from_txids(
     let number_of_signers = utxos.len() as u64;
 
     for utxo in utxos {
-        let amount_back = utxo.amount - ((total_amount - fee) / number_of_signers);
+        let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
 
         let outpoint = OutPoint::new(
             Txid::from_str(utxo.txid.as_str()).unwrap(),
@@ -532,6 +532,7 @@ fn create_tx_from_txids(
             }
         )
     }
+
     BitcoinTransaction {
         version: 2,
         lock_time: PackedLockTime(100),
