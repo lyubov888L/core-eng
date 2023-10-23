@@ -36,7 +36,7 @@ pub struct BitcoinWallet {
 impl BitcoinWallet {
     pub fn new(public_key: XOnlyPublicKey, network: Network) -> Self {
         // let tweaked_public_key = TweakedPublicKey::dangerous_assume_tweaked(public_key);
-        let address = Address::p2tr(&Secp256k1::new(), public_key, None, Network::Regtest);
+        let address = Address::p2tr(&Secp256k1::new(), public_key, None, network);
         // let address = Address::p2tr_tweaked(tweaked_public_key, network);
         Self {
             address,

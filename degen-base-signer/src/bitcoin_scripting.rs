@@ -32,6 +32,7 @@ pub fn create_script_unspendable() -> Script {
 pub fn create_tree(
     secp: &Secp256k1<All>,
     aggregate_x_only: XOnlyPublicKey,
+    network: Network,
     script_1: &Script,
     script_2: &Script,
 ) -> (TaprootSpendInfo, Address) {
@@ -43,13 +44,13 @@ pub fn create_tree(
     let tap_info = builder.finalize(secp, aggregate_x_only).unwrap();
 
     // let tweaked_public_key = TweakedPublicKey::dangerous_assume_tweaked(aggregate_x_only);
-    // let address_tweaked = Address::p2tr_tweaked(tweaked_public_key, Network::Regtest);
+    // let address_tweaked = Address::p2tr_tweaked(tweaked_public_key, network);
 
     let address = Address::p2tr(
         secp,
         tap_info.internal_key(),
         tap_info.merkle_root(),
-        Network::Regtest,
+        network,
     );
 
     (tap_info, address)

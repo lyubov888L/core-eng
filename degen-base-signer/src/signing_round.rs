@@ -422,7 +422,7 @@ impl Signable for SigShareRequestPox {
         }
 
         hasher.update(self.message.as_slice());
-        hasher.update(bitcoin::psbt::serialize::Serialize::serialize(&self.transaction).as_slice())
+        hasher.update(bitcoin::psbt::serialize::Serialize::serialize(&self.transaction).as_slice());
     }
 }
 
@@ -549,6 +549,7 @@ impl SigningRound {
         key_ids: Vec<u32>,
         network_private_key: Scalar,
         public_keys: PublicKeys,
+        network: Network,
     ) -> SigningRound {
         assert!(threshold <= total_keys);
         let mut rng = OsRng;
@@ -604,11 +605,11 @@ impl SigningRound {
                     "cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115",
                 )
                     .unwrap(),
-                Network::Regtest,
+                network,
             ),
             transaction_fee: 0,
             amount_to_script: 0,
-            bitcoin_network: Network::Regtest,
+            bitcoin_network: network,
             script_addresses: BTreeMap::new(),
         }
     }
@@ -892,7 +893,7 @@ impl SigningRound {
         let script_2 = create_script_unspendable();
 
         // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
-        let (_, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
+        let (_, script_address) = create_tree(&secp, keypair.x_only_public_key().0, self.bitcoin_network, &script_1, &script_2);
 
         let transaction_clone = sign_request.transaction;
         let transaction_outputs = &transaction_clone.output;
@@ -908,7 +909,7 @@ impl SigningRound {
         transaction_outputs.iter().for_each(|output| {
             match Address::from_script(&output.script_pubkey, self.bitcoin_network) {
                 Ok(address) => {
-                    if pox_addresses.clone().contains(&address) {
+                    if pox_addresses.contains(&address) {
                         pox_addresses.retain(|user| user != &address);
                         pox_total_amount = pox_total_amount + output.value;
                     }
@@ -1242,7 +1243,7 @@ impl SigningRound {
         let script_2 = create_script_unspendable();
 
         // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
-        let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, &script_1, &script_2);
+        let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, self.bitcoin_network, &script_1, &script_2);
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_address]).len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
@@ -1278,9 +1279,9 @@ impl SigningRound {
         let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]);
         let mut run_refund_phase = false;
 
-        for utxo in script_utxos.clone() {
+        for utxo in &script_utxos {
             if amount_to_pox <= utxo.amount {
-                script_utxo = Ok(utxo);
+                script_utxo = Ok(utxo.clone());
                 script_address_needs_funds = false;
             }
             else {
@@ -1344,10 +1345,10 @@ impl SigningRound {
                 unspent_list_signer.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
             }
 
-            for utxo in unspent_list_signer.clone() {
+            for utxo in &unspent_list_signer {
                 if total_amount < amount_to_script + user_to_script_fee {
                     total_amount += utxo.amount;
-                    valid_utxos.push(utxo);
+                    valid_utxos.push(utxo.clone());
                     continue
                 }
                 break
@@ -1486,6 +1487,7 @@ impl From<&FrostSigner> for SigningRound {
 
 #[cfg(test)]
 mod test {
+    use bitcoin::Network;
     use hashbrown::HashMap;
     use rand_core::{CryptoRng, OsRng, RngCore};
     use wsts::{common::PolyCommitment, schnorr::ID, Scalar};
@@ -1505,7 +1507,7 @@ mod test {
     fn dkg_public_share() {
         let mut rnd = get_rng();
         let mut signing_round =
-            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default());
+            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default(), Network::Regtest);
         let public_share = DkgPublicShare {
             dkg_id: 0,
             party_id: 0,
@@ -1522,7 +1524,7 @@ mod test {
     #[test]
     fn dkg_private_shares() {
         let mut signing_round =
-            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default());
+            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default(), Network::Regtest);
         let mut private_shares = DkgPrivateShares {
             dkg_id: 0,
             key_id: 0,
@@ -1537,7 +1539,7 @@ mod test {
     fn public_shares_done() {
         let mut rnd = get_rng();
         let mut signing_round =
-            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default());
+            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default(), Network::Regtest);
         // publich_shares_done starts out as false
         assert_eq!(false, signing_round.public_shares_done());
 
@@ -1559,7 +1561,7 @@ mod test {
     fn can_dkg_end() {
         let mut rnd = get_rng();
         let mut signing_round =
-            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default());
+            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default(), Network::Regtest);
         // can_dkg_end starts out as false
         assert_eq!(false, signing_round.can_dkg_end());
 
@@ -1582,7 +1584,7 @@ mod test {
     #[test]
     fn dkg_ended() {
         let mut signing_round =
-            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default());
+            SigningRound::new(1, 1, 1, 1, vec![1], Default::default(), Default::default(), Network::Regtest);
         match signing_round.dkg_ended() {
             Ok(dkg_end) => match dkg_end {
                 MessageTypes::DkgEnd(dkg_end) => match dkg_end.status {
