@@ -12,7 +12,7 @@ use degen_base_signer::{
     net::{Error as HttpNetError, Message, NetListen},
     signing_round::{
         DkgBegin, DkgPublicShare, MessageTypes, NonceRequest, NonceResponse, Signable,
-        SignatureShareRequest, SigShareRequestPox, SigShareResponsePox,
+        SignatureShareRequest, SigShareRequestPox, POXTxidResponse,
     },
 };
 use hashbrown::HashSet;
@@ -216,6 +216,19 @@ where
 
     pub fn run_voting_actors_out(&mut self, actors: Vec<StacksAddress>) -> Result<(), Error> {
         self.start_voting_out(actors).unwrap();
+        Ok(())
+    }
+
+    pub fn send_txid_to_signers(&mut self, txid: Txid) -> Result<(), Error> {
+        let txid = POXTxidResponse {
+            dkg_id: self.current_dkg_id,
+            txid,
+        };
+        let txid_message = Message {
+            sig: txid.sign(&self.network_private_key).expect(""),
+            msg: MessageTypes::POXTxidResponse(txid),
+        };
+        self.network.send_message(txid_message)?;
         Ok(())
     }
 

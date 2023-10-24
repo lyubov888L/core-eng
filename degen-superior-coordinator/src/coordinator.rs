@@ -1,7 +1,7 @@
 use bitcoin::{psbt::Prevouts, util::{
     base58,
     sighash::{Error as SighashError, SighashCache},
-}, SchnorrSighashType, XOnlyPublicKey, Address, Txid, PackedLockTime, TxIn, Script, Sequence, Witness, TxOut, OutPoint};
+}, hashes::Hash, SchnorrSighashType, XOnlyPublicKey, Address, Txid, PackedLockTime, TxIn, Script, Sequence, Witness, TxOut, OutPoint};
 use blockstack_lib::{types::chainstate::StacksAddress, util::secp256k1::Secp256k1PublicKey};
 use degen_base_coordinator::{
     coordinator::Error as FrostCoordinatorError, create_coordinator, create_coordinator_from_path,
@@ -469,6 +469,7 @@ impl StacksCoordinator {
                     info!("{:#?}", signed_tx);
                     match self.local_bitcoin_node.broadcast_transaction(&signed_tx) {
                         Ok(txid) => {
+                            self.frost_coordinator.send_txid_to_signers(txid)?;
                             info!("Successfully broadcasted transaction from scripts to PoX. Txid: {:?}", txid);
                         }
                         Err(e) => {
@@ -482,6 +483,7 @@ impl StacksCoordinator {
             }
         }
         else {
+            self.frost_coordinator.send_txid_to_signers(Txid::all_zeros())?;
             info!("There was a bad actor in the pool, transaction creation aborted.")
         }
 

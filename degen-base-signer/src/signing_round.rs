@@ -10,6 +10,7 @@ use bitcoin::util::sighash::SighashCache;
 use bitcoin::util::{base58, taproot};
 use bitcoin::{Transaction, Txid};
 use bitcoin::{
+    hashes::hex::FromHex,
     EcdsaSighashType, KeyPair, Network, OutPoint, PrivateKey, PublicKey, SchnorrSighashType,
     Script, TxOut, Witness, XOnlyPublicKey,
 };
@@ -166,7 +167,8 @@ pub struct SigningRound {
     pub transaction_fee: u64,
     pub amount_to_script: u64,
     pub bitcoin_network: Network,
-
+    pub previous_transactions: Vec<(u64, Txid, Vec<Address>, u64)>,
+    pub amount_back_to_script: Vec<(u64, u64)>,
     pub script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
 }
 
@@ -233,6 +235,7 @@ pub enum MessageTypes {
     SigShareRequestPox(SigShareRequestPox),
     SigShareResponsePox(SigShareResponsePox),
     VoteOutActorRequest(VoteOutActorRequest),
+    POXTxidResponse(POXTxidResponse),
     DegensCreateScriptsRequest(DegensScriptRequest),
     DegensCreateScriptsResponse(DegensScriptResponse),
     DegensSpendScripts(DegensSpendScript),
@@ -469,6 +472,20 @@ impl Signable for VoteOutActorRequest {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct POXTxidResponse {
+    pub dkg_id: u64,
+    pub txid: Txid,
+}
+
+impl Signable for POXTxidResponse {
+    fn hash(&self, hasher: &mut Sha256) {
+        hasher.update("DEGENS_CREATE_SCRIPT_REQUEST".as_bytes());
+        hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.txid.to_vec().as_slice());
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct DegensScriptRequest {
     pub dkg_id: u64,
     pub aggregate_public_key: Point,
@@ -610,6 +627,8 @@ impl SigningRound {
             transaction_fee: 0,
             amount_to_script: 0,
             bitcoin_network: network,
+            previous_transactions: vec![(0, Txid::all_zeros(), vec![], 0)],
+            amount_back_to_script: vec![(0,0)],
             script_addresses: BTreeMap::new(),
         }
     }
@@ -644,6 +663,9 @@ impl SigningRound {
             },
             MessageTypes::VoteOutActorRequest(vote_out_request) => {
                 self.vote_miners_out_of_pool(vote_out_request)
+            }
+            MessageTypes::POXTxidResponse(txid_response) => {
+                self.add_txid_to_list(txid_response)
             }
             MessageTypes::DegensCreateScriptsRequest(degens_create_script) => {
                 self.degen_create_script(degens_create_script)
@@ -1228,11 +1250,116 @@ impl SigningRound {
         Ok(vec![])
     }
 
+    fn add_txid_to_list(
+        &mut self,
+        txid_response: POXTxidResponse,
+    ) -> Result<Vec<MessageTypes>, Error> {
+        let pox_addresses = vec![
+            Address::from_str("bcrt1phvt5tfz4hlkth0k7ls9djweuv9rwv5a0s5sa9085umupftnyalxq0zx28d").unwrap(),
+            Address::from_str("bcrt1pdsavc4yrdq0sdmjcmf7967eeem2ny6vzr4f8m7dyemcvncs0xtwsc85zdq").unwrap()
+        ];
+        let pox_sc_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
+        self.previous_transactions.push((get_current_block_height(&self.local_bitcoin_node), txid_response.txid, pox_addresses, pox_sc_amount));
+
+        Ok(vec![])
+    }
+
+    fn check_if_transaction_is_good(
+        &mut self,
+        script_address: &Address,
+    ) -> bool {
+        // once current block height is greater than tuple's block height (1st field) check if:
+        //   - call bitcoin_node.get_transacion(txid) returns Vec<(address, amount)>
+        //   - all (both) pox addresses from this list (2nd field) are contained in the txid call (3rd field)
+        //   - their total amount (4th field) match the sum of the amount for them in the txid call (3rd field)
+        //   - each signer's output back to script is contained in the outputs from the txid call (3rd field)
+
+        let prev_transactions = &self.previous_transactions;
+        let current_block = get_current_block_height(&self.local_bitcoin_node);
+        let mut remaining_transactions = vec![];
+        let mut are_transactions_good = true;
+
+        for (block_height, txid, pox_addresses, pox_amount) in prev_transactions.iter() {
+            let amount_back: Vec<(u64, u64)> = self.amount_back_to_script.clone()
+                .iter()
+                .filter(|&(first, _)| first != block_height)
+                .cloned()
+                .collect();
+            self.amount_back_to_script = self.amount_back_to_script.iter()
+                .filter(|&(height, _)| height > block_height)
+                .cloned()
+                .collect();
+            let can_verify_script_output = if let Some((block_height_back, _)) = amount_back.first() {
+                if block_height_back == block_height {
+                    true
+                }
+                else {
+                    info!("No data found for block height found {} in your amount back to script list.", block_height);
+                    false
+                }
+            }
+            else {
+                info!("Failed to fetch amount back to script for block height {} from your list.", block_height);
+                false
+            };
+
+            if *block_height < current_block {
+                match &self.local_bitcoin_node.get_transacion(&txid) {
+                    Ok(data) => {
+                        let address_set: HashSet<String> = pox_addresses.iter().map(|address| address.to_string()).collect();
+                        let mut sum_of_matched_amounts = 0;
+                        let mut pox_addresses_matched = vec![];
+                        let mut found_address_in_outputs = false;
+
+                        for (address, amount) in data.iter() {
+                            if address_set.contains(address) {
+                                sum_of_matched_amounts += amount;
+                                pox_addresses_matched.push(address);
+                            }
+                            if can_verify_script_output {
+                                if address == &script_address.to_string() {
+                                    found_address_in_outputs = true;
+                                    if *amount != amount_back[0].1 {
+                                        info!("The amount back to your script did not match the expected value: {} != {}", amount, amount_back[0].1);
+                                        are_transactions_good = false;
+                                    }
+                                }
+                            }
+                        }
+
+                        if can_verify_script_output && !found_address_in_outputs {
+                            info!("Could not find your script address in the outputs!");
+                            are_transactions_good = false;
+                        }
+
+                        if sum_of_matched_amounts != *pox_amount {
+                            info!("The sum of the amount to PoX of the transaction included in block {} did not match the expected value: {} != {}. Txid: {:?}", block_height, sum_of_matched_amounts, pox_amount, txid);
+                            are_transactions_good = false;
+                        } else if pox_addresses_matched.len() != address_set.len() {
+                            info!("PoX addresses mismatch in transaction from block {}. Expected:\n{:#?}\nActual:\n{:#?}", block_height, pox_addresses.iter().map(|address| address.to_string()), pox_addresses_matched);
+                            are_transactions_good = false;
+                        }
+                    }
+                    Err(e) => {
+                        info!("Couldn't fetch transaction from txid {:?}: {:?}", &txid.to_string(), e);
+                        are_transactions_good = false;
+                    }
+                }
+            }
+            else {
+                remaining_transactions.push((*block_height, *txid, pox_addresses.clone(), *pox_amount));
+            }
+        }
+
+        self.previous_transactions = remaining_transactions;
+        are_transactions_good
+    }
+
     fn degen_create_script(
         &mut self,
         degens_create_script: DegensScriptRequest,
     ) -> Result<Vec<MessageTypes>, Error> {
-        // let current_block_height = get_current_block_height(&self.local_bitcoin_node);
+        let current_block_height = get_current_block_height(&self.local_bitcoin_node);
         let secp = Secp256k1::new();
         let keypair = KeyPair::from_secret_key(&secp, &self.bitcoin_private_key);
 
@@ -1244,6 +1371,9 @@ impl SigningRound {
 
         // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
         let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, self.bitcoin_network, &script_1, &script_2);
+
+        // TODO: check this, if it's true all good, if it's not then there was an issue in one of the previous transactions
+        let are_previous_transactions_good = self.check_if_transaction_is_good(&script_address);
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_address]).len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
@@ -1279,10 +1409,16 @@ impl SigningRound {
         let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]);
         let mut run_refund_phase = false;
 
+        let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
+        let fee = 1000;
+        let number_of_signers = self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_wallet.address().clone()]).len() as u64;
+
         for utxo in &script_utxos {
             if amount_to_pox <= utxo.amount {
                 script_utxo = Ok(utxo.clone());
                 script_address_needs_funds = false;
+                let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+                self.amount_back_to_script.push((current_block_height, amount_back));
             }
             else {
                 script_utxo = Err(InvalidUTXO);
@@ -1391,6 +1527,8 @@ impl SigningRound {
 
                 for utxo in self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]) {
                     if amount_to_pox <= utxo.amount {
+                        let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+                        self.amount_back_to_script.push((current_block_height, amount_back));
                         script_utxo = Ok(utxo);
                     } else {
                         script_utxo = Err(InvalidUTXO);
@@ -1480,6 +1618,8 @@ impl From<&FrostSigner> for SigningRound {
             transaction_fee: signer.config.transaction_fee,
             amount_to_script: signer.config.amount_to_script,
             bitcoin_network: signer.config.bitcoin_network,
+            previous_transactions: vec![(0, Txid::all_zeros(), vec![], 0)],
+            amount_back_to_script: vec![(0,0)],
             script_addresses: BTreeMap::new(),
         }
     }

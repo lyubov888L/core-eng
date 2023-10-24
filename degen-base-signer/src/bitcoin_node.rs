@@ -1,7 +1,7 @@
 use std::{borrow::Cow, str::FromStr};
 
 use bdk::descriptor::calc_checksum;
-use bitcoin::{consensus::Encodable, hashes::sha256d::Hash, util::amount::Amount, Txid};
+use bitcoin::{consensus::Encodable, hashes::sha256d::Hash, util::amount::Amount, Txid, Address};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use tracing::{debug, info, warn};
@@ -12,11 +12,13 @@ pub trait BitcoinNode {
     /// Broadcast the BTC transaction to the bitcoin node
     fn broadcast_transaction(&self, tx: &BitcoinTransaction) -> Result<Txid, Error>;
     /// Load the Bitcoin wallet from the given address
-    fn load_wallet(&self, address: &bitcoin::Address) -> Result<(), Error>;
+    fn load_wallet(&self, address: &Address) -> Result<(), Error>;
     /// Get all utxos from the given address
-    fn list_unspent(&self, address: &bitcoin::Address) -> Result<Vec<UTXO>, Error>;
+    fn list_unspent(&self, address: &Address) -> Result<Vec<UTXO>, Error>;
     /// Get all imported descriptors
-    fn list_descriptors(&self) -> Result<Vec<bitcoin::Address>, Error>;
+    fn list_descriptors(&self) -> Result<Vec<Address>, Error>;
+    /// Get a transaction based on a parsed txid
+    fn get_transacion(&self, txid: &Txid) -> Result<Vec<(String, u64)>, Error>;
 }
 
 pub type BitcoinTransaction = bitcoin::Transaction;
@@ -130,7 +132,7 @@ impl BitcoinNode for LocalhostBitcoinNode {
         result
     }
 
-    fn list_descriptors(&self) -> Result<Vec<bitcoin::Address>, Error> {
+    fn list_descriptors(&self) -> Result<Vec<Address>, Error> {
         let private = false;
 
         let response = self.call_wallet("listdescriptors", [private])?;
@@ -155,9 +157,49 @@ impl BitcoinNode for LocalhostBitcoinNode {
             .collect();
 
         let mut address_list = vec![];
-        result.unwrap().iter().for_each(|address| address_list.push(bitcoin::Address::from_str(address.as_str()).unwrap()));
+        result.unwrap().iter().for_each(|address| address_list.push(Address::from_str(address.as_str()).unwrap()));
 
         Ok(address_list)
+    }
+
+    fn get_transacion(&self, txid: &Txid) -> Result<Vec<(String, u64)>, Error> {
+        debug!("Retrieving transaction...");
+        let include_watchonly = true;
+        let verbose = false;
+        let params = (txid, include_watchonly, verbose);
+
+        let response = self.call_wallet("gettransaction", params)?;
+
+        let details = response
+            .as_object()
+            .ok_or(Error::InvalidResponseJSON("Gettransaction response is not an object".to_string()))?
+            .get("details")
+            .ok_or(Error::InvalidResponseJSON("Missing 'details' field".to_string()))?
+            .as_array()
+            .ok_or(Error::InvalidResponseJSON("'details' is not an array".to_string()))?;
+
+        let result: Result<Vec<(String, u64)>, Error> = details
+            .iter()
+            .filter(|detail| {
+                detail.as_object()
+                    .and_then(|obj| obj.get("category"))
+                    .map(|category| category.as_str())
+                    .map(|category_str| category_str == Some("receive"))
+                    .unwrap_or(false)
+            })
+            .map(|detail| {
+                detail.as_object()
+                    .and_then(|obj| {
+                        let address = obj.get("address")?;
+                        let amount = obj.get("amount")?;
+                        Some((address.as_str()?.to_string(), (amount.as_f64()? * 100000000.0) as u64))
+                    })
+                    .ok_or(Error::InvalidResponseJSON("Missing or invalid 'address' or 'amount' fields.".to_string()))
+                    .map(|fields| fields)
+            })
+            .collect();
+
+        result
     }
 }
 
