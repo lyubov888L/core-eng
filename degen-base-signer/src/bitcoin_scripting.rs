@@ -11,6 +11,7 @@ use bitcoin::util::taproot;
 use bitcoin::util::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use crate::bitcoin_node::{LocalhostBitcoinNode, UTXO};
 use crate::signing_round::Error;
+use crate::signing_round::UtxoError::InvalidUTXO;
 
 pub fn create_script_refund(
     user_public_key: &XOnlyPublicKey,
@@ -32,25 +33,24 @@ pub fn create_script_unspendable() -> Script {
 pub fn create_tree(
     secp: &Secp256k1<All>,
     aggregate_x_only: XOnlyPublicKey,
-    network: Network,
     script_1: &Script,
     script_2: &Script,
 ) -> (TaprootSpendInfo, Address) {
     let builder = taproot::TaprootBuilder::with_huffman_tree(vec![
         (1, script_1.clone()),
         (1, script_2.clone()),
-    ]).unwrap();
+    ]).unwrap(); // TODO: degens - or use unwrap check it
 
     let tap_info = builder.finalize(secp, aggregate_x_only).unwrap();
 
     // let tweaked_public_key = TweakedPublicKey::dangerous_assume_tweaked(aggregate_x_only);
-    // let address_tweaked = Address::p2tr_tweaked(tweaked_public_key, network);
+    // let address_tweaked = Address::p2tr_tweaked(tweaked_public_key, Network::Regtest);
 
     let address = Address::p2tr(
         secp,
         tap_info.internal_key(),
         tap_info.merkle_root(),
-        network,
+        Network::Regtest,
     );
 
     (tap_info, address)
@@ -294,4 +294,26 @@ pub fn create_refund_tx(
             },
         ],
     }
+}
+
+pub fn get_good_utxo_from_list(
+    utxos_list: Vec<UTXO>,
+    amount: u64,
+) -> Result<UTXO, crate::signing_round::UtxoError> {
+    let mut found_utxo = false;
+    let mut good_utxo = UTXO::default();
+
+    for utxo in utxos_list {
+        if utxo.amount == amount {
+            good_utxo = utxo;
+            found_utxo = true;
+            break;
+        }
+    };
+
+    if !found_utxo {
+        return Err(InvalidUTXO);
+    }
+
+    Ok(good_utxo)
 }

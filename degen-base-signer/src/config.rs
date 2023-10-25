@@ -115,7 +115,6 @@ struct RawConfig {
     pub bitcoin_node_rpc_url: String,
     /// The transaction fee in Satoshis used to broadcast transactions to the stacks node
     pub transaction_fee: u64,
-    pub amount_to_script: u64,
     pub network: Network,    pub http_relay_url: String,
     pub keys_threshold: u32,
     pub network_private_key: String,
@@ -255,7 +254,6 @@ pub struct Config {
     pub bitcoin_network: bitcoin::Network,
     pub http_relay_url: String,
     pub keys_threshold: u32,
-    pub amount_to_script: u64,
     pub network_private_key: Scalar,
     pub public_keys: PublicKeys,
     pub signer_key_ids: SignerKeyIds,
@@ -283,7 +281,6 @@ impl Config {
         transaction_fee: u64,
         bitcoin_network: bitcoin::Network,
         keys_threshold: u32,
-        amount_to_script: u64,
         coordinator_public_key: ecdsa::PublicKey,
         public_keys: PublicKeys,
         signer_key_ids: SignerKeyIds,
@@ -311,7 +308,6 @@ impl Config {
             coordinator_public_key,
             network_private_key,
             http_relay_url,
-            amount_to_script,
             total_signers: public_keys.signers.len().try_into().unwrap(),
             total_keys: public_keys.key_ids.len().try_into().unwrap(),
             public_keys,
@@ -525,9 +521,6 @@ impl TryFrom<&RawConfig> for Config {
         }
 
         let amount_to_pox = local_stacks_node.get_pool_total_spend_per_block(stacks_wallet.address()).unwrap_or(0) as u64 / local_stacks_node.get_miners_list(stacks_wallet.address()).unwrap_or(vec![stacks_wallet.address().clone()]).len() as u64;
-        if raw_config.amount_to_script < amount_to_pox {
-            return Err(Error::AmountTooLow(format!("The amount you specified is too low in order to send to PoX: {} < {}", raw_config.amount_to_script, amount_to_pox)));
-        }
 
         Ok(Config::new(
             mining_name,
@@ -546,7 +539,6 @@ impl TryFrom<&RawConfig> for Config {
             raw_config.transaction_fee,
             bitcoin_network,
             raw_config.keys_threshold,
-            raw_config.amount_to_script,
             raw_config.coordinator_public_key()?,
             raw_config.public_keys()?,
             raw_config.signer_key_ids(),

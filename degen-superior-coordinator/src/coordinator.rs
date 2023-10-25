@@ -620,7 +620,6 @@ fn create_frost_coordinator_from_contract(
         config.transaction_fee.clone(),
         config.bitcoin_network.clone(),
         keys_threshold.try_into().unwrap(),
-        config.amount_to_script,
         coordinator_public_key,
         public_keys,
         signer_key_ids,
