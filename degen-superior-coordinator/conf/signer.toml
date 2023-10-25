@@ -1,4 +1,4 @@
-mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v2"
+mining_contract = "ST02D2KP0630FS1BCJ7YM4TYMDH6NS9QKR0B57R3.mining-m3-testing-v3"
 exchange_contract = "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.bridge-contract"
 stacks_private_key = "c2eae79ad466a0a98d64e24fc27d0a8eaf75891c9029d5f821a67743affa874201"
 bitcoin_private_key = "2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90"
@@ -10,6 +10,8 @@ http_relay_url = "http://localhost:9776"
 keys_threshold = 4
 # Insert your amount in satoshi (1 BTC = 100,000,000 SATS)
 amount_to_script = 4000000000
+fee_to_script = 300
+fee_to_pox = 1000
 frost_state_file = "frost.state.bin"
 network_private_key = "9aSCCR6eirt1NAHwJtSz4HMwBHTyMo62SyPMvVDt5DQn"
 signers =  [

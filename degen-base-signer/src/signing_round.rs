@@ -166,6 +166,7 @@ pub struct SigningRound {
     pub bitcoin_wallet: BitcoinWallet,
     pub transaction_fee: u64,
     pub amount_to_script: u64,
+    pub fee_to_script: u64,
     pub bitcoin_network: Network,
     pub previous_transactions: Vec<(u64, Txid, Vec<Address>, u64)>,
     pub amount_back_to_script: Vec<(u64, u64)>,
@@ -488,6 +489,7 @@ impl Signable for POXTxidResponse {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct DegensScriptRequest {
     pub dkg_id: u64,
+    pub fee_to_pox: u64,
     pub aggregate_public_key: Point,
 }
 
@@ -495,6 +497,7 @@ impl Signable for DegensScriptRequest {
     fn hash(&self, hasher: &mut Sha256) {
         hasher.update("DEGENS_CREATE_SCRIPT_REQUEST".as_bytes());
         hasher.update(self.dkg_id.to_be_bytes());
+        hasher.update(self.fee_to_pox.to_be_bytes());
         hasher.update(self.aggregate_public_key.to_string().as_bytes());
     }
 }
@@ -627,8 +630,9 @@ impl SigningRound {
             transaction_fee: 0,
             amount_to_script: 0,
             bitcoin_network: network,
-            previous_transactions: vec![(0, Txid::all_zeros(), vec![], 0)],
-            amount_back_to_script: vec![(0,0)],
+            previous_transactions: vec![],
+            amount_back_to_script: vec![],
+            fee_to_script: 0,
             script_addresses: BTreeMap::new(),
         }
     }
@@ -1377,7 +1381,7 @@ impl SigningRound {
 
         let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_address]).len() as u64;
         let amount_to_script: u64 = self.amount_to_script;
-        let user_to_script_fee: u64 = 300;
+        let user_to_script_fee: u64 = self.fee_to_script;
 
         let mut script_utxo: Result<UTXO, UtxoError> = Err(InvalidUTXO);
         let mut script_address_needs_funds = true;
@@ -1410,14 +1414,14 @@ impl SigningRound {
         let mut run_refund_phase = false;
 
         let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
-        let fee = 1000;
+        let fee_to_pox = degens_create_script.fee_to_pox;
         let number_of_signers = self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_wallet.address().clone()]).len() as u64;
 
         for utxo in &script_utxos {
             if amount_to_pox <= utxo.amount {
                 script_utxo = Ok(utxo.clone());
                 script_address_needs_funds = false;
-                let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+                let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
                 self.amount_back_to_script.push((current_block_height, amount_back));
             }
             else {
@@ -1527,7 +1531,7 @@ impl SigningRound {
 
                 for utxo in self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]) {
                     if amount_to_pox <= utxo.amount {
-                        let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+                        let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
                         self.amount_back_to_script.push((current_block_height, amount_back));
                         script_utxo = Ok(utxo);
                     } else {
@@ -1617,9 +1621,10 @@ impl From<&FrostSigner> for SigningRound {
             bitcoin_wallet: signer.config.bitcoin_wallet.clone(),
             transaction_fee: signer.config.transaction_fee,
             amount_to_script: signer.config.amount_to_script,
+            fee_to_script: signer.config.fee_to_script,
             bitcoin_network: signer.config.bitcoin_network,
-            previous_transactions: vec![(0, Txid::all_zeros(), vec![], 0)],
-            amount_back_to_script: vec![(0,0)],
+            previous_transactions: vec![],
+            amount_back_to_script: vec![],
             script_addresses: BTreeMap::new(),
         }
     }

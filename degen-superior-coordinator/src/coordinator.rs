@@ -307,6 +307,7 @@ pub struct StacksCoordinator {
     local_peg_queue: SqlitePegQueue,
     local_stacks_node: NodeClient,
     local_bitcoin_node: LocalhostBitcoinNode,
+    fee_to_pox: u64,
     pub local_fee_wallet: WrapPegWallet,
 }
 
@@ -338,8 +339,7 @@ impl StacksCoordinator {
         // Divide the addresses by the types of their response. If an error came through, add him to bad actors list.
         for position in 0..response_utxos.len() {
             if response_utxos[position].clone().unwrap_or(UTXO::default()) != UTXO::default() {
-                // TODO: degens - include the fee in the amount verification
-                if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_pox {
+                if response_utxos[position].clone().unwrap().amount as u128 >= amount_to_pox + self.fee_to_pox as u128 / (all_miners.len() + 1) as u128 {
                     good_actors.push(response_stacks_addresses[position]);
                     utxos.push(response_utxos[position].clone().unwrap());
                 }
@@ -623,6 +623,8 @@ fn create_frost_coordinator_from_contract(
         config.bitcoin_network.clone(),
         keys_threshold.try_into().unwrap(),
         config.amount_to_script,
+        config.fee_to_script,
+        config.fee_to_pox,
         coordinator_public_key,
         public_keys,
         signer_key_ids,
@@ -773,12 +775,14 @@ impl TryFrom<&Config> for StacksCoordinator {
         } else {
             SqlitePegQueue::in_memory(start_block_height, current_block_height)
         }?;
+        let fee_to_pox = config.fee_to_pox;
 
         Ok(Self {
             local_peg_queue,
             local_stacks_node,
             local_bitcoin_node,
             frost_coordinator,
+            fee_to_pox,
             local_fee_wallet: WrapPegWallet {
                 bitcoin_wallet,
                 stacks_wallet,
