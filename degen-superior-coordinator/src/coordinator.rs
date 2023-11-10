@@ -20,6 +20,7 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use wsts::{common::Signature, field::Element, taproot::SchnorrProof, Point, Scalar};
 use blockstack_lib::vm::types::PrincipalData;
@@ -618,6 +619,7 @@ fn create_frost_coordinator_from_contract(
         signer_key_ids,
         network_private_key,
         http_relay_url,
+        Arc::new(Mutex::new(Vec::<u64>::new())),
         miner_status,
     ))
     .map_err(|e| Error::ConfigError(e.to_string()))

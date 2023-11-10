@@ -7,11 +7,15 @@ use p256k1::{
 
 use serde::Deserialize;
 use std::{fs, thread, time};
+use std::io::Write;
+use std::ops::Add;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use bincode::config;
 use bitcoin::{KeyPair, XOnlyPublicKey};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use chrono::Local;
 use blockstack_lib::address::AddressHashMode;
 use blockstack_lib::burnchains::Address;
 use blockstack_lib::chainstate::stacks::{StacksPrivateKey, StacksTransaction, TransactionVersion};
@@ -264,6 +268,7 @@ pub struct Config {
     pub coordinator_public_key: ecdsa::PublicKey,
     pub total_signers: u32,
     pub total_keys: u32,
+    pub pox_transactions_block_heights: Arc<Mutex<Vec<u64>>>,
     pub status: MinerStatus,
 }
 
@@ -292,6 +297,7 @@ impl Config {
         signer_key_ids: SignerKeyIds,
         network_private_key: Scalar,
         http_relay_url: String,
+        pox_transactions_block_heights: Arc<Mutex<Vec<u64>>>,
         status: MinerStatus,
     ) -> Config {
         Self {
@@ -320,6 +326,7 @@ impl Config {
             total_keys: public_keys.key_ids.len().try_into().unwrap(),
             public_keys,
             signer_key_ids,
+            pox_transactions_block_heights,
             status,
         }
     }
@@ -528,7 +535,68 @@ impl TryFrom<&RawConfig> for Config {
             info!("Couldn't load script address: {:?}", e)
         }
 
-        let amount_to_pox = local_stacks_node.get_pool_total_spend_per_block(stacks_wallet.address()).unwrap_or(0) as u64 / local_stacks_node.get_miners_list(stacks_wallet.address()).unwrap_or(vec![stacks_wallet.address().clone()]).len() as u64;
+        let pox_transactions_block_heights = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let pox_tx_block_heights_thread = Arc::clone(&pox_transactions_block_heights);
+
+        thread::spawn(move || {
+            loop {
+                if let Ok(mut array) = pox_tx_block_heights_thread.lock() {
+                    if array.len() >= 2 {
+                        while array.len() != 1 {
+                            if array[1] - array[0] > 1 {
+                                info!("The coordinator didn't fund the scripts for {} block(s)!", array[1] - array[0] - 1);
+
+                                let mut missing_block_heights = String::new();
+
+                                for i in array[0] + 1..array[1] - 1 {
+                                    missing_block_heights.push_str(&format!("{}, ", i))
+                                };
+
+                                missing_block_heights.push_str((array[1] - 1).to_string().as_str());
+
+                                let log_directory = std::path::Path::new("../degen-base-signer/logs/");
+
+                                if !log_directory.exists() {
+                                    if let Err(e) = fs::create_dir_all(&log_directory) {
+                                        info!("Failed to create directory: {:?}", e);
+                                    }
+                                }
+
+                                let file_path = log_directory.join(format!("malicious_coordinator_no_pox_transaction.txt", ));
+
+                                let formatted_date_time = Local::now().format("%d-%m-%Y - %H:%M:%S").to_string();
+
+                                match fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&file_path) {
+                                    Ok(mut file) => {
+                                        let log_message = format!("\
+                                        Date and time: {:?}\n\
+                                        Cause: The coordinator didn't fund the scripts for {} block(s)!\n\
+                                        Block heights: {:#?}\n\n\
+                                        ============================================\n\n", formatted_date_time, array[1] - array[0] - 1, missing_block_heights);
+
+                                        if let Err(e) = file.write_all(log_message.as_bytes()) {
+                                            info!("Couldn't write to file: {:?}", e)
+                                        }
+
+                                        if let Err(e) = file.flush() {
+                                            info!("Couldn't flush the file: {:?}", e)
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info!("Couldn't create log file: {:?}", e);
+                                    }
+                                }
+                            }
+                            array.remove(0);
+                        }
+                    }
+                }
+                sleep(time::Duration::from_secs(60));
+            }
+        });
 
         Ok(Config::new(
             mining_name,
@@ -554,6 +622,7 @@ impl TryFrom<&RawConfig> for Config {
             raw_config.signer_key_ids(),
             raw_config.network_private_key()?,
             raw_config.http_relay_url.clone(),
+            pox_transactions_block_heights,
             status
         ))
     }

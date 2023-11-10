@@ -1,0 +1,36 @@
+Date and time: "10-11-2023 - 18:01:07"
+Cause: The coordinator didn't fund the scripts for 1 block(s)!
+Block heights: "1053"
+
+============================================
+
+Date and time: "10-11-2023 - 18:01:07"
+Cause: The coordinator didn't fund the scripts for 1 block(s)!
+Block heights: "1053"
+
+============================================
+
+Date and time: "10-11-2023 - 18:01:08"
+Cause: The coordinator didn't fund the scripts for 1 block(s)!
+Block heights: "1053"
+
+============================================
+
+Date and time: "10-11-2023 - 18:02:07"
+Cause: The coordinator didn't fund the scripts for 4 block(s)!
+Block heights: "1055, 1056, 1057, 1058"
+
+============================================
+
+Date and time: "10-11-2023 - 18:02:07"
+Cause: The coordinator didn't fund the scripts for 4 block(s)!
+Block heights: "1055, 1056, 1057, 1058"
+
+============================================
+
+Date and time: "10-11-2023 - 18:02:08"
+Cause: The coordinator didn't fund the scripts for 4 block(s)!
+Block heights: "1055, 1056, 1057, 1058"
+
+============================================
+

@@ -55,6 +55,7 @@ use wsts::{
     v1,
 };
 use std::io::Write;
+use std::sync::{Arc, Mutex};
 use crate::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode, UTXO};
 use crate::bitcoin_scripting::{
     create_refund_tx, create_script_refund, create_script_unspendable, create_tree,
@@ -165,8 +166,8 @@ pub struct SigningRound {
     pub transaction_fee: u64,
     pub fee_to_script: u64,
     pub bitcoin_network: Network,
-
     pub script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
+    pub pox_transactions_block_heights: Arc<Mutex<Vec<u64>>>,
 }
 
 pub struct Signer {
@@ -612,6 +613,7 @@ impl SigningRound {
             fee_to_script: 0,
             bitcoin_network: network,
             script_addresses: BTreeMap::new(),
+            pox_transactions_block_heights: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -1183,7 +1185,12 @@ impl SigningRound {
         &mut self,
         degens_create_script: DegensScriptRequest,
     ) -> Result<Vec<MessageTypes>, Error> {
-        // let current_block_height = get_current_block_height(&self.local_bitcoin_node);
+        let current_block_height = get_current_block_height(&self.local_bitcoin_node);
+
+        if let Ok(mut array) = self.pox_transactions_block_heights.lock() {
+            array.push(current_block_height);
+        }
+
         let secp = Secp256k1::new();
         let keypair = KeyPair::from_secret_key(&secp, &self.bitcoin_private_key);
 
@@ -1563,6 +1570,7 @@ impl From<&FrostSigner> for SigningRound {
             fee_to_script: signer.config.fee_to_script,
             bitcoin_network: signer.config.bitcoin_network,
             script_addresses: BTreeMap::new(),
+            pox_transactions_block_heights: Arc::clone(&signer.config.pox_transactions_block_heights),
         }
     }
 }
