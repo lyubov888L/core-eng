@@ -62,6 +62,8 @@ pub struct RawConfig {
     /// The transaction fee in Satoshis used to broadcast transactions to the stacks node
     pub transaction_fee: u64,
     pub amount_to_script: u64,
+    pub fee_to_script: u64,
+    pub fee_to_pox: u64,
     /// Frost specific config options. Must be specified if signer_config_path is not used
     pub http_relay_url: Option<String>,
     pub frost_state_file: Option<String>,
@@ -156,6 +158,8 @@ pub struct Config {
     /// The transaction fee in Satoshis used to broadcast transactions to the stacks node
     pub transaction_fee: u64,
     pub amount_to_script: u64,
+    pub fee_to_script: u64,
+    pub fee_to_pox: u64,
     /// Frost specific config options. Must be specified if signer_config_path is not used
     pub http_relay_url: Option<String>,
     pub network_private_key: Option<String>,
@@ -237,6 +241,8 @@ impl TryFrom<RawConfig> for Config {
             stacks_version,
             transaction_fee: config.transaction_fee,
             amount_to_script: config.amount_to_script,
+            fee_to_script: config.fee_to_script,
+            fee_to_pox: config.fee_to_pox,
             http_relay_url: config.http_relay_url,
             network_private_key: config.network_private_key,
             polling_interval: config.polling_interval.unwrap_or(DEFAULT_POLLING_INTERVAL),

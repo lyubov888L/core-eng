@@ -498,11 +498,8 @@ fn create_tx_from_txids(
     let mut inputs = vec![];
     let mut outputs = vec![];
     let amount_to_each_pox_address = total_amount / user_addresses.len() as u64;
-    let number_of_signers = utxos.len() as u64;
 
     for utxo in utxos {
-        let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
-
         let outpoint = OutPoint::new(
             Txid::from_str(utxo.txid.as_str()).unwrap(),
             utxo.vout.clone()
@@ -516,12 +513,6 @@ fn create_tx_from_txids(
                 witness: Witness::default(),
             }
         );
-        outputs.push(
-            TxOut {
-                value: amount_back,
-                script_pubkey: Script::from_str(&utxo.scriptPubKey).unwrap(),
-            }
-        )
     }
 
     for address in user_addresses {
@@ -620,6 +611,8 @@ fn create_frost_coordinator_from_contract(
         config.transaction_fee.clone(),
         config.bitcoin_network.clone(),
         keys_threshold.try_into().unwrap(),
+        config.fee_to_script,
+        config.fee_to_pox,
         coordinator_public_key,
         public_keys,
         signer_key_ids,

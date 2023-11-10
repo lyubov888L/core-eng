@@ -65,7 +65,8 @@ pub fn create_tx_from_user_to_script (
     user_address: &Address,
     script_address: &Address,
     amount: u64,
-    fee: u64,
+    fee_to_script: u64,
+    fee_to_pox: u64,
 ) -> Transaction {
     let mut inputs = vec![];
     let mut total_utxo_amount: u64 = 0;
@@ -88,7 +89,7 @@ pub fn create_tx_from_user_to_script (
         )
     }
 
-    let amount_back_to_user = total_utxo_amount - amount - fee;
+    let amount_back_to_user = total_utxo_amount - amount - fee_to_script - fee_to_pox;
 
     if amount_back_to_user != 0 {
         Transaction {
@@ -97,7 +98,7 @@ pub fn create_tx_from_user_to_script (
             input: inputs,
             output: vec![
                 TxOut {
-                    value: amount - fee,
+                    value: amount + fee_to_pox,
                     script_pubkey: script_address.script_pubkey(),
                 },
                 TxOut {
@@ -114,7 +115,7 @@ pub fn create_tx_from_user_to_script (
             input: inputs,
             output: vec![
                 TxOut {
-                    value: amount - fee,
+                    value: amount + fee_to_pox,
                     script_pubkey: script_address.script_pubkey(),
                 }
             ],

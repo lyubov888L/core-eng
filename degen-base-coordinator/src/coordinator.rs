@@ -72,6 +72,7 @@ pub struct Coordinator<Network: NetListen> {
     aggregate_public_key: Point,
     network_private_key: Scalar,
     public_key: PublicKey,
+    fee_to_pox: u64,
     // from user public key to script bitcoin address
     script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
 }
@@ -94,6 +95,7 @@ impl<Network: NetListen> Coordinator<Network> {
             signature_shares: Default::default(),
             network_private_key: config.network_private_key,
             public_key: config.coordinator_public_key,
+            fee_to_pox: config.fee_to_pox,
             script_addresses: Default::default(),
         })
     }
@@ -170,6 +172,7 @@ where
     fn start_scripts(&mut self) -> Result<(), Error> {
         let create_script = DegensScriptRequest {
             dkg_id: self.current_dkg_id,
+            fee_to_pox: self.fee_to_pox,
             aggregate_public_key: self.get_aggregate_public_key().unwrap_or(Point::default()),
         };
         let create_scripts_message = Message {
