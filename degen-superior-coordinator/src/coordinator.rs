@@ -20,6 +20,7 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use wsts::{common::Signature, field::Element, taproot::SchnorrProof, Point, Scalar};
 use blockstack_lib::vm::types::PrincipalData;
@@ -503,8 +504,6 @@ fn create_tx_from_txids(
     let number_of_signers = utxos.len() as u64;
 
     for utxo in utxos {
-        let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
-
         let outpoint = OutPoint::new(
             Txid::from_str(utxo.txid.as_str()).unwrap(),
             utxo.vout.clone()
@@ -518,12 +517,17 @@ fn create_tx_from_txids(
                 witness: Witness::default(),
             }
         );
-        outputs.push(
-            TxOut {
-                value: amount_back,
-                script_pubkey: Script::from_str(&utxo.scriptPubKey).unwrap(),
-            }
-        )
+
+        if utxo.amount > (total_amount + fee) / number_of_signers {
+            let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+
+            outputs.push(
+                TxOut {
+                    value: amount_back,
+                    script_pubkey: Script::from_str(&utxo.scriptPubKey).unwrap(),
+                }
+            )
+        }
     }
 
     for address in user_addresses {
@@ -631,6 +635,8 @@ fn create_frost_coordinator_from_contract(
         network_private_key,
         http_relay_url,
         miner_status,
+        Arc::new(Mutex::new(Vec::<u64>::new())),
+        true,
     ))
     .map_err(|e| Error::ConfigError(e.to_string()))
 }

@@ -5,7 +5,7 @@ use bitcoin::blockdata::script::Builder;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::psbt::{PartiallySignedTransaction, Prevouts};
-use bitcoin::secp256k1::{Secp256k1, SecretKey};
+use bitcoin::secp256k1::{All, Secp256k1, SecretKey};
 use bitcoin::util::sighash::SighashCache;
 use bitcoin::util::{base58, taproot};
 use bitcoin::{Transaction, Txid};
@@ -56,12 +56,9 @@ use wsts::{
     v1,
 };
 use std::io::Write;
+use std::sync::{Arc, Mutex};
 use crate::bitcoin_node::{BitcoinNode, LocalhostBitcoinNode, UTXO};
-use crate::bitcoin_scripting::{
-    create_refund_tx, create_script_refund, create_script_unspendable, create_tree,
-    create_tx_from_user_to_script, get_current_block_height,
-    sign_tx_script_refund, sign_tx_user_to_script,
-};
+use crate::bitcoin_scripting::{create_refund_tx, create_script_refund, create_script_unspendable, create_tree, create_tx_from_user_to_script, get_current_block_height, sign_tx_script_refund, sign_tx_user_to_script};
 use crate::bitcoin_wallet::BitcoinWallet;
 use crate::peg_wallet::{BitcoinWallet as BitcoinWalletTrait, StacksWallet as PegWallet};
 use crate::stacks_node::client::NodeClient;
@@ -171,6 +168,8 @@ pub struct SigningRound {
     pub previous_transactions: Vec<(u64, Txid, Vec<Address>, u64)>,
     pub amount_back_to_script: Vec<(u64, u64)>,
     pub script_addresses: BTreeMap<PublicKey, BitcoinAddress>,
+    pub pox_transactions_block_heights: Arc<Mutex<Vec<u64>>>,
+    pub fund_each_block: bool,
 }
 
 pub struct Signer {
@@ -634,6 +633,8 @@ impl SigningRound {
             amount_back_to_script: vec![],
             fee_to_script: 0,
             script_addresses: BTreeMap::new(),
+            pox_transactions_block_heights: Arc::new(Mutex::new(vec![])),
+            fund_each_block: true,
         }
     }
 
@@ -951,24 +952,27 @@ impl SigningRound {
         let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
         let fee = 1000;
         let mut found_utxo_in_inputs = false;
-        let mut found_correct_output = false;
+        let mut found_correct_output = self.fund_each_block;
 
         for utxo in script_utxos {
-            let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
-
-            for input in transaction_inputs {
-                if input.previous_output.txid.to_string() == utxo.txid && input.previous_output.vout == utxo.vout {
-                    found_utxo_in_inputs = true;
-                    break
+                for input in transaction_inputs {
+                    if input.previous_output.txid.to_string() == utxo.txid && input.previous_output.vout == utxo.vout {
+                        found_utxo_in_inputs = true;
+                        break
+                    }
                 }
-            }
 
-            for output in transaction_outputs {
-                if Script::from_str(&utxo.scriptPubKey).unwrap_or(Script::new()).eq(&output.script_pubkey) && amount_back == output.value {
-                    found_correct_output = true;
-                    break
+                if utxo.amount > (total_amount + fee) / number_of_signers {
+                    let amount_back = utxo.amount - ((total_amount + fee) / number_of_signers);
+
+                    for output in transaction_outputs {
+                        if Script::from_str(&utxo.scriptPubKey).unwrap_or(Script::new()).eq(&output.script_pubkey) && amount_back == output.value {
+                            found_correct_output = true;
+                            break
+                        }
+                    }
                 }
-            }
+
 
             if found_correct_output && found_utxo_in_inputs {
                 break
@@ -1364,6 +1368,11 @@ impl SigningRound {
         degens_create_script: DegensScriptRequest,
     ) -> Result<Vec<MessageTypes>, Error> {
         let current_block_height = get_current_block_height(&self.local_bitcoin_node);
+
+        if let Ok(mut array) = self.pox_transactions_block_heights.lock() {
+            array.push(current_block_height);
+        }
+
         let secp = Secp256k1::new();
         let keypair = KeyPair::from_secret_key(&secp, &self.bitcoin_private_key);
 
@@ -1373,22 +1382,71 @@ impl SigningRound {
         let script_1 = create_script_refund(&self.bitcoin_xonly_public_key, 100);
         let script_2 = create_script_unspendable();
 
-        // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing
+        // TODO: degens - change keypair xonly back to aggregate_x_only after done with testing and remove the match
         let (tap_info, script_address) = create_tree(&secp, keypair.x_only_public_key().0, self.bitcoin_network, &script_1, &script_2);
 
         // TODO: check this, if it's true all good, if it's not then there was an issue in one of the previous transactions
         let are_previous_transactions_good = self.check_if_transaction_is_good(&script_address);
 
-        let amount_to_pox = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64 / self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_address]).len() as u64;
-        let amount_to_script: u64 = self.amount_to_script;
-        let user_to_script_fee: u64 = self.fee_to_script;
+        let number_of_signers = self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_wallet.address().clone()]).len() as u64 - 1;
+        let fee_to_script = self.fee_to_script;
+        let fee_to_pox = degens_create_script.fee_to_pox / number_of_signers;
+        let total_fees = fee_to_script + fee_to_pox;
+        let amount_to_script = match self.fund_each_block {
+            true => self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).expect("Failed to retrieve amount to script") as u64 / number_of_signers,
+            false => self.amount_to_script,
+        };
+
+        let script_utxo = self.run_script_funding_phase(
+            current_block_height,
+            secp,
+            keypair,
+            script_1,
+            script_address,
+            &tap_info,
+            amount_to_script,
+            fee_to_script,
+            fee_to_pox,
+            total_fees,
+            number_of_signers,
+        );
+
+        let mut msgs = vec![];
+
+        let response = DegensScriptResponse {
+            signer_id: self.signer.signer_id,
+            stacks_address: self.stacks_address,
+            merkle_root: tap_info.merkle_root().unwrap(),
+            utxo: script_utxo,
+        };
+
+        let response = MessageTypes::DegensCreateScriptsResponse(response);
+        msgs.push(response);
+
+        Ok(msgs)
+    }
+
+    fn run_script_funding_phase(
+        &mut self,
+        current_block_height: u64,
+        secp: Secp256k1<All>,
+        keypair: KeyPair,
+        script_1: Script,
+        script_address: Address,
+        tap_info: &TaprootSpendInfo,
+        amount_to_script: u64,
+        fee_to_script: u64,
+        fee_to_pox: u64,
+        total_fees: u64,
+        number_of_signers: u64,
+    ) -> Result<UTXO, UtxoError> {
+        let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
 
         let mut script_utxo: Result<UTXO, UtxoError> = Err(InvalidUTXO);
         let mut script_address_needs_funds = true;
 
-        let imported_addresses = self.local_bitcoin_node.list_descriptors().unwrap_or(vec![]);
-
-        if imported_addresses.contains(&script_address) == false {
+        // Check if the script address is already loaded into the wallet. If not, try loading it until the wallet stops refreshing.
+        if self.local_bitcoin_node.list_descriptors().unwrap_or(vec![]).contains(&script_address) == false {
             let mut number_of_iterations = 0;
             loop {
                 match self.local_bitcoin_node.load_wallet(&script_address) {
@@ -1406,23 +1464,23 @@ impl SigningRound {
                     }
                 }
                 number_of_iterations += 1;
-                sleep(Duration::from_secs((1)));
+                sleep(Duration::from_secs(1));
             }
         }
 
         let script_utxos = self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]);
         let mut run_refund_phase = false;
 
-        let total_amount = self.local_stacks_node.get_pool_total_spend_per_block(self.stacks_wallet.address()).unwrap_or(0) as u64;
-        let fee_to_pox = degens_create_script.fee_to_pox;
-        let number_of_signers = self.local_stacks_node.get_miners_list(&self.stacks_wallet.address()).unwrap_or(vec![self.stacks_wallet.address().clone()]).len() as u64;
-
+        // Check if the script address contains enough money to send to PoX. If yes, we found the UTXO, otherwise run refund and fund phases.
         for utxo in &script_utxos {
-            if amount_to_pox <= utxo.amount {
+            if amount_to_script <= utxo.amount {
                 script_utxo = Ok(utxo.clone());
                 script_address_needs_funds = false;
-                let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
-                self.amount_back_to_script.push((current_block_height, amount_back));
+
+                if !self.fund_each_block && utxo.amount > (total_amount + fee_to_pox) / number_of_signers {
+                    let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
+                    self.amount_back_to_script.push((current_block_height, amount_back));
+                }
             }
             else {
                 script_utxo = Err(InvalidUTXO);
@@ -1430,6 +1488,7 @@ impl SigningRound {
             }
         }
 
+        // Run the refund phase
         if run_refund_phase {
             let mut amount_to_refund: u64 = 0;
 
@@ -1437,8 +1496,8 @@ impl SigningRound {
                 amount_to_refund += utxo.amount;
             }
 
-            if amount_to_refund > user_to_script_fee {
-                amount_to_refund -= user_to_script_fee;
+            if amount_to_refund > fee_to_script {
+                amount_to_refund -= fee_to_script;
 
                 let refund_tx = create_refund_tx(&script_utxos, self.bitcoin_wallet.address(), amount_to_refund);
 
@@ -1450,11 +1509,11 @@ impl SigningRound {
                     });
                 });
 
-                let signed_refund_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, &tap_info);
+                let signed_refund_tx = sign_tx_script_refund(&secp, &refund_tx, &txout_vec, &script_1, &keypair, tap_info);
 
                 match self.local_bitcoin_node.broadcast_transaction(&signed_refund_tx) {
                     Ok(txid) => {
-                        info!("Succesfully refunded money. Txid: {:?}", txid)
+                        info!("Successfully refunded from script. Txid: {:?}", txid)
                     }
                     Err(e) => {
                         info!("Couldn't broadcast refund transaction: {:?}", e)
@@ -1466,6 +1525,7 @@ impl SigningRound {
             }
         }
 
+        // Run the funding phase
         if script_address_needs_funds == true {
             info!("Not enough money on script. Running the funding phase!");
 
@@ -1486,7 +1546,7 @@ impl SigningRound {
             }
 
             for utxo in &unspent_list_signer {
-                if total_amount < amount_to_script + user_to_script_fee {
+                if total_amount < amount_to_script + total_fees {
                     total_amount += utxo.amount;
                     valid_utxos.push(utxo.clone());
                     continue
@@ -1494,7 +1554,7 @@ impl SigningRound {
                 break
             }
 
-            if total_amount < amount_to_script + user_to_script_fee {
+            if total_amount < amount_to_script + total_fees {
                 info!("You don't have enough money to fund the script!");
                 script_utxo = Err(UTXOAmount);
             }
@@ -1514,7 +1574,8 @@ impl SigningRound {
                     &self.bitcoin_wallet.address(),
                     &script_address,
                     amount_to_script,
-                    user_to_script_fee,
+                    fee_to_script,
+                    fee_to_pox,
                 );
 
                 let user_to_script_signed =
@@ -1522,7 +1583,7 @@ impl SigningRound {
 
                 match self.local_bitcoin_node.broadcast_transaction(&user_to_script_signed) {
                     Ok(txid) => {
-                        info!("Succesfully funded script. Txid: {:?}", txid)
+                        info!("Successfully funded script. Txid: {:?}", txid)
                     }
                     Err(e) => {
                         info!("Couldn't broadcast fund script transaction: {:?}", e)
@@ -1530,9 +1591,11 @@ impl SigningRound {
                 };
 
                 for utxo in self.local_bitcoin_node.list_unspent(&script_address).unwrap_or(vec![]) {
-                    if amount_to_pox <= utxo.amount {
-                        let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
-                        self.amount_back_to_script.push((current_block_height, amount_back));
+                    if amount_to_script <= utxo.amount {
+                        if !self.fund_each_block && utxo.amount > (total_amount + fee_to_pox) / number_of_signers {
+                            let amount_back = utxo.amount - ((total_amount + fee_to_pox) / number_of_signers);
+                            self.amount_back_to_script.push((current_block_height, amount_back));
+                        }
                         script_utxo = Ok(utxo);
                     } else {
                         script_utxo = Err(InvalidUTXO);
@@ -1545,22 +1608,10 @@ impl SigningRound {
             info!("Couldn't get any valid transaction from script!");
         }
         else {
-            info!("Found a good UTXO from script!");
+            info!("Found a good UTXO on your script, proceeding with it!");
         }
 
-        let mut msgs = vec![];
-
-        let response = DegensScriptResponse {
-            signer_id: self.signer.signer_id,
-            stacks_address: self.stacks_address,
-            merkle_root: tap_info.merkle_root().unwrap(),
-            utxo: script_utxo,
-        };
-
-        let response = MessageTypes::DegensCreateScriptsResponse(response);
-        msgs.push(response);
-
-        Ok(msgs)
+        script_utxo
     }
 }
 
@@ -1626,6 +1677,8 @@ impl From<&FrostSigner> for SigningRound {
             previous_transactions: vec![],
             amount_back_to_script: vec![],
             script_addresses: BTreeMap::new(),
+            pox_transactions_block_heights: Arc::clone(&signer.config.pox_transactions_block_heights),
+            fund_each_block: signer.config.fund_each_block,
         }
     }
 }

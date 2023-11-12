@@ -10,7 +10,7 @@ use bitcoin::util::sighash::{ScriptPath, SighashCache};
 use bitcoin::util::taproot;
 use bitcoin::util::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use crate::bitcoin_node::{LocalhostBitcoinNode, UTXO};
-use crate::signing_round::Error;
+use crate::signing_round::UtxoError::InvalidUTXO;
 
 pub fn create_script_refund(
     user_public_key: &XOnlyPublicKey,
@@ -60,12 +60,13 @@ pub fn get_current_block_height(client: &LocalhostBitcoinNode) -> u64 {
     client.get_block_count().unwrap()
 }
 
-pub fn create_tx_from_user_to_script (
+pub fn create_tx_from_user_to_script(
     previous_outputs_vec: &Vec<UTXO>,
     user_address: &Address,
     script_address: &Address,
     amount: u64,
-    fee: u64,
+    fee_to_script: u64,
+    fee_to_pox: u64,
 ) -> Transaction {
     let mut inputs = vec![];
     let mut total_utxo_amount: u64 = 0;
@@ -88,7 +89,7 @@ pub fn create_tx_from_user_to_script (
         )
     }
 
-    let amount_back_to_user = total_utxo_amount - amount - fee;
+    let amount_back_to_user = total_utxo_amount - amount - fee_to_script - fee_to_pox;
 
     if amount_back_to_user != 0 {
         Transaction {
@@ -97,7 +98,7 @@ pub fn create_tx_from_user_to_script (
             input: inputs,
             output: vec![
                 TxOut {
-                    value: amount - fee,
+                    value: amount + fee_to_pox,
                     script_pubkey: script_address.script_pubkey(),
                 },
                 TxOut {
@@ -114,7 +115,7 @@ pub fn create_tx_from_user_to_script (
             input: inputs,
             output: vec![
                 TxOut {
-                    value: amount - fee,
+                    value: amount + fee_to_pox,
                     script_pubkey: script_address.script_pubkey(),
                 }
             ],
@@ -122,77 +123,7 @@ pub fn create_tx_from_user_to_script (
     }
 }
 
-pub fn sign_tx_user_to_script(
-    secp: &Secp256k1<All>,
-    tx_ref: &Transaction,
-    prevouts: &Prevouts<TxOut>,
-    key_pair_internal: &KeyPair,
-) -> Transaction {
-    let mut tx = tx_ref.clone();
-
-    for position in 0..tx_ref.input.len() {
-        let sighash_sig = SighashCache::new(&mut tx.clone())
-            .taproot_key_spend_signature_hash(position, prevouts, SchnorrSighashType::AllPlusAnyoneCanPay) // or All
-            .unwrap();
-
-        let tweak_key_pair = key_pair_internal.tap_tweak(secp, None);
-        // then sig
-        let msg = Message::from_slice(&sighash_sig).unwrap();
-
-        let sig = secp.sign_schnorr(&msg, &tweak_key_pair.to_inner());
-
-        //verify sig
-        secp.verify_schnorr(&sig, &msg, &tweak_key_pair.to_inner().x_only_public_key().0)
-            .unwrap();
-
-        // then witness
-        let schnorr_sig = SchnorrSig {
-            sig,
-            hash_ty: SchnorrSighashType::AllPlusAnyoneCanPay, // or All
-        };
-
-        tx.input[position].witness.push(schnorr_sig.serialize());
-    }
-
-    tx
-}
-
-/// uses key sign
-pub fn sign_tx_script_to_pox(
-    secp: &Secp256k1<All>,
-    tx_ref: &Transaction,
-    prevouts: &Prevouts<TxOut>,
-    key_pair_internal: &KeyPair,
-    tap_info: &TaprootSpendInfo,
-) -> Transaction {
-    let mut tx = tx_ref.clone();
-    let sighash_sig = SighashCache::new(&mut tx.clone())
-        .taproot_key_spend_signature_hash(0, prevouts, SchnorrSighashType::AllPlusAnyoneCanPay) // or All
-        .unwrap();
-
-    let tweak_key_pair = key_pair_internal.tap_tweak(secp, tap_info.merkle_root());
-    // then sig
-    let msg = Message::from_slice(&sighash_sig).unwrap();
-
-    let sig = secp.sign_schnorr(&msg, &tweak_key_pair.to_inner());
-
-    //verify sig
-    secp.verify_schnorr(&sig, &msg, &tweak_key_pair.to_inner().x_only_public_key().0)
-        .unwrap();
-
-    // then witness
-    let schnorr_sig = SchnorrSig {
-        sig,
-        hash_ty: SchnorrSighashType::AllPlusAnyoneCanPay, // or All
-    };
-
-    tx.input[0].witness.push(schnorr_sig.serialize());
-
-    tx
-}
-
 /// uses script sign
-/// TODO: degens - how to sign multiple inputs using this?
 pub fn sign_tx_script_refund(
     secp: &Secp256k1<All>,
     tx_ref: &Transaction,
@@ -246,20 +177,6 @@ pub fn sign_tx_script_refund(
     tx
 }
 
-fn verify_p2tr_commitment(
-    secp: &Secp256k1<All>,
-    script: &Script,
-    key_pair_user: &KeyPair,
-    tap_info: &TaprootSpendInfo,
-    actual_control: &ControlBlock,
-) {
-    let tweak_key_pair = key_pair_user
-        .tap_tweak(&secp, tap_info.merkle_root())
-        .to_inner();
-    let (tweak_key_pair_public_key, _) = tweak_key_pair.x_only_public_key();
-    assert!(actual_control.verify_taproot_commitment(secp, tweak_key_pair_public_key, script));
-}
-
 pub fn create_refund_tx(
     utxos: &Vec<UTXO>,
     user_address: &Address,
@@ -294,4 +211,39 @@ pub fn create_refund_tx(
             },
         ],
     }
+}
+
+pub fn sign_tx_user_to_script(
+    secp: &Secp256k1<All>,
+    tx_ref: &Transaction,
+    prevouts: &Prevouts<TxOut>,
+    key_pair_internal: &KeyPair,
+) -> Transaction {
+    let mut tx = tx_ref.clone();
+
+    for position in 0..tx_ref.input.len() {
+        let sighash_sig = SighashCache::new(&mut tx.clone())
+            .taproot_key_spend_signature_hash(position, prevouts, SchnorrSighashType::AllPlusAnyoneCanPay) // or All
+            .unwrap();
+
+        let tweak_key_pair = key_pair_internal.tap_tweak(secp, None);
+        // then sig
+        let msg = Message::from_slice(&sighash_sig).unwrap();
+
+        let sig = secp.sign_schnorr(&msg, &tweak_key_pair.to_inner());
+
+        //verify sig
+        secp.verify_schnorr(&sig, &msg, &tweak_key_pair.to_inner().x_only_public_key().0)
+            .unwrap();
+
+        // then witness
+        let schnorr_sig = SchnorrSig {
+            sig,
+            hash_ty: SchnorrSighashType::AllPlusAnyoneCanPay, // or All
+        };
+
+        tx.input[position].witness.push(schnorr_sig.serialize());
+    }
+
+    tx
 }
