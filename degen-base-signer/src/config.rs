@@ -560,58 +560,56 @@ impl TryFrom<&RawConfig> for Config {
 
         thread::spawn(move || {
             loop {
-                if let Ok(mut array) = pox_tx_block_heights_thread.lock() {
-                    if array.len() >= 2 {
-                        while array.len() != 1 {
-                            if array[1] - array[0] > 1 {
-                                info!("The coordinator didn't fund the scripts for {} block(s)!", array[1] - array[0] - 1);
+                if let Ok(mut block_heights) = pox_tx_block_heights_thread.lock() {
+                    while block_heights.len() >= 1 {
+                        if block_heights[1] - block_heights[0] > 1 {
+                            info!("The coordinator didn't fund the scripts for {} block(s)!", block_heights[1] - block_heights[0] - 1);
 
-                                let mut missing_block_heights = String::new();
+                            let mut missing_block_heights = String::new();
 
-                                for i in array[0] + 1..array[1] - 1 {
-                                    missing_block_heights.push_str(&format!("{}, ", i))
-                                };
+                            for i in block_heights[0] + 1..block_heights[1] - 1 {
+                                missing_block_heights.push_str(&format!("{}, ", i))
+                            };
 
-                                missing_block_heights.push_str((array[1] - 1).to_string().as_str());
+                            missing_block_heights.push_str((block_heights[1] - 1).to_string().as_str());
 
-                                let log_directory = std::path::Path::new("../degen-base-signer/logs/");
+                            let log_directory = std::path::Path::new("../degen-base-signer/logs/");
 
-                                if !log_directory.exists() {
-                                    if let Err(e) = fs::create_dir_all(&log_directory) {
-                                        info!("Failed to create directory: {:?}", e);
-                                    }
-                                }
-
-                                let file_path = log_directory.join(format!("malicious_coordinator_no_pox_transaction.txt", ));
-
-                                let formatted_date_time = Local::now().format("%d-%m-%Y - %H:%M:%S").to_string();
-
-                                match fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(&file_path) {
-                                    Ok(mut file) => {
-                                        let log_message = format!("\
-                                        Date and time: {:?}\n\
-                                        Cause: The coordinator didn't fund the scripts for {} block(s)!\n\
-                                        Block heights: {:#?}\n\n\
-                                        ============================================\n\n", formatted_date_time, array[1] - array[0] - 1, missing_block_heights);
-
-                                        if let Err(e) = file.write_all(log_message.as_bytes()) {
-                                            info!("Couldn't write to file: {:?}", e)
-                                        }
-
-                                        if let Err(e) = file.flush() {
-                                            info!("Couldn't flush the file: {:?}", e)
-                                        }
-                                    }
-                                    Err(e) => {
-                                        info!("Couldn't create log file: {:?}", e);
-                                    }
+                            if !log_directory.exists() {
+                                if let Err(e) = fs::create_dir_all(&log_directory) {
+                                    info!("Failed to create directory: {:?}", e);
                                 }
                             }
-                            array.remove(0);
+
+                            let file_path = log_directory.join(format!("malicious_coordinator_no_pox_transaction.txt", ));
+
+                            let formatted_date_time = Local::now().format("%d-%m-%Y - %H:%M:%S").to_string();
+
+                            match fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&file_path) {
+                                Ok(mut file) => {
+                                    let log_message = format!("\
+                                    Date and time: {:?}\n\
+                                    Cause: The coordinator didn't fund the scripts for {} block(s)!\n\
+                                    Block heights: {:#?}\n\n\
+                                    ============================================\n\n", formatted_date_time, block_heights[1] - block_heights[0] - 1, missing_block_heights);
+
+                                    if let Err(e) = file.write_all(log_message.as_bytes()) {
+                                        info!("Couldn't write to file: {:?}", e)
+                                    }
+
+                                    if let Err(e) = file.flush() {
+                                        info!("Couldn't flush the file: {:?}", e)
+                                    }
+                                }
+                                Err(e) => {
+                                    info!("Couldn't create log file: {:?}", e);
+                                }
+                            }
                         }
+                        block_heights.remove(0);
                     }
                 }
                 sleep(time::Duration::from_secs(60));

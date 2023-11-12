@@ -973,7 +973,6 @@ impl SigningRound {
                     }
                 }
 
-
             if found_correct_output && found_utxo_in_inputs {
                 break
             }
