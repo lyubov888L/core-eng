@@ -561,7 +561,7 @@ impl TryFrom<&RawConfig> for Config {
         thread::spawn(move || {
             loop {
                 if let Ok(mut block_heights) = pox_tx_block_heights_thread.lock() {
-                    while block_heights.len() >= 1 {
+                    while block_heights.len() > 1 {
                         if block_heights[1] - block_heights[0] > 1 {
                             info!("The coordinator didn't fund the scripts for {} block(s)!", block_heights[1] - block_heights[0] - 1);
 
