@@ -387,69 +387,70 @@ impl StacksCoordinator {
         // Make a temporary nonce in order to avoid ConflictingNonceInMempool errors
         let mut nonce = self.local_stacks_node.next_nonce(&self.local_fee_wallet.stacks_wallet.address()).unwrap_or(0);
 
+        // TODO: Remove comments once testing done
         // Check for warnings and warn or propose for removal the actors
-        for actor in bad_actors {
-            match self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor) {
-                Ok(warnings_number) => {
-                    if warnings_number < 2 {
-                        match self.local_fee_wallet.stacks_wallet.warn_miner(nonce, actor) {
-                            Ok(tx) => {
-                                match self.local_stacks_node.broadcast_transaction(&tx) {
-                                    Ok(()) => {
-                                        info!("Successfully warned {:?}.", &actor.to_string());
-                                        nonce += 1;
-                                    }
-                                    Err(e) => {
-                                        info!("Couldn't broadcast warning transaction for {:?}: {:?}", &actor.to_string(), e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                info!("Couldn't warn {:?}: {:?}", &actor.to_string(), e);
-                            }
-                        }
-                    } else {
-                        match self.local_fee_wallet.stacks_wallet.propose_removal(nonce, actor) {
-                            Ok(tx) => {
-                                match self.local_stacks_node.broadcast_transaction(&tx) {
-                                    Ok(()) => {
-                                        info!("Proposed {:?} for removal.", &actor.to_string());
-                                        to_be_voted_out.push(actor);
-                                        nonce += 1;
-                                    }
-                                    Err(e) => {
-                                        info!("Failed to broadcast propose for removal transaction for {:?}: {:?}", &actor.to_string(), e);
-                                    }
-                                }
+        // for actor in bad_actors {
+        //     match self.local_stacks_node.get_warn_number_user(&self.local_fee_wallet.stacks_wallet.address(), &actor) {
+        //         Ok(warnings_number) => {
+        //             if warnings_number < 2 {
+        //                 match self.local_fee_wallet.stacks_wallet.warn_miner(nonce, actor) {
+        //                     Ok(tx) => {
+        //                         match self.local_stacks_node.broadcast_transaction(&tx) {
+        //                             Ok(()) => {
+        //                                 info!("Successfully warned {:?}.", &actor.to_string());
+        //                                 nonce += 1;
+        //                             }
+        //                             Err(e) => {
+        //                                 info!("Couldn't broadcast warning transaction for {:?}: {:?}", &actor.to_string(), e);
+        //                             }
+        //                         }
+        //                     }
+        //                     Err(e) => {
+        //                         info!("Couldn't warn {:?}: {:?}", &actor.to_string(), e);
+        //                     }
+        //                 }
+        //             } else {
+        //                 match self.local_fee_wallet.stacks_wallet.propose_removal(nonce, actor) {
+        //                     Ok(tx) => {
+        //                         match self.local_stacks_node.broadcast_transaction(&tx) {
+        //                             Ok(()) => {
+        //                                 info!("Proposed {:?} for removal.", &actor.to_string());
+        //                                 to_be_voted_out.push(actor);
+        //                                 nonce += 1;
+        //                             }
+        //                             Err(e) => {
+        //                                 info!("Failed to broadcast propose for removal transaction for {:?}: {:?}", &actor.to_string(), e);
+        //                             }
+        //                         }
 
-                                match self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(nonce, actor) {
-                                    Ok(tx) => {
-                                        match self.local_stacks_node.broadcast_transaction(&tx) {
-                                            Ok(()) => {
-                                                info!("Successfully voted out {:?}", &actor.to_string());
-                                                nonce += 1;
-                                            }
-                                            Err(e) => {
-                                                info!("Failed to broadcast vote positive removal transaction for {:?}: {:?}", &actor.to_string(), e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        info!("Couldn't vote positive for kicking {:?} out of pool: {:?}", &actor.to_string(), e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                info!("Couldn't propose for removal {:?}: {:?}", &actor.to_string(), e)
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    info!("Couldn't get warnings number for {:#?}: {:?}", &actor.to_string(), e);
-                }
-            }
-        }
+        //                         match self.local_fee_wallet.stacks_wallet.vote_positive_remove_request(nonce, actor) {
+        //                             Ok(tx) => {
+        //                                 match self.local_stacks_node.broadcast_transaction(&tx) {
+        //                                     Ok(()) => {
+        //                                         info!("Successfully voted out {:?}", &actor.to_string());
+        //                                         nonce += 1;
+        //                                     }
+        //                                     Err(e) => {
+        //                                         info!("Failed to broadcast vote positive removal transaction for {:?}: {:?}", &actor.to_string(), e);
+        //                                     }
+        //                                 }
+        //                             }
+        //                             Err(e) => {
+        //                                 info!("Couldn't vote positive for kicking {:?} out of pool: {:?}", &actor.to_string(), e);
+        //                             }
+        //                         }
+        //                     }
+        //                     Err(e) => {
+        //                         info!("Couldn't propose for removal {:?}: {:?}", &actor.to_string(), e)
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //         Err(e) => {
+        //             info!("Couldn't get warnings number for {:#?}: {:?}", &actor.to_string(), e);
+        //         }
+        //     }
+        // }
 
         if to_be_voted_out.len() > 0 {
             self.frost_coordinator.run_voting_actors_out(to_be_voted_out).unwrap();
