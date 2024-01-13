@@ -6,7 +6,7 @@ use crate::stacks_wallet::{
 };
 use bitcoin::XOnlyPublicKey;
 use bitcoin::{Address as BitcoinAddress, TxOut};
-use blockstack_lib::{
+use stackslib::{
     chainstate::stacks::StacksTransaction,
     types::chainstate::{StacksAddress, StacksPublicKey},
 };

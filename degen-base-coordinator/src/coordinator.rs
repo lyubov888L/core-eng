@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use bitcoin::{Address, Txid};
 use bitcoin::util::taproot::TapBranchHash;
-use blockstack_lib::burnchains::bitcoin::address::BitcoinAddress;
-use blockstack_lib::types::chainstate::StacksAddress;
+use stackslib::burnchains::bitcoin::address::BitcoinAddress;
+use stackslib::types::chainstate::StacksAddress;
 use degen_base_signer::signing_round::UtxoError;
 
 use degen_base_signer::config::{Config, Error as ConfigError};
@@ -729,9 +729,9 @@ mod test {
     use test_utils::parse_env;
     use std::str::FromStr;
     use bitcoin::{KeyPair, Network, PrivateKey, XOnlyPublicKey};
-    use blockstack_lib::address::AddressHashMode;
-    use blockstack_lib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
-    use blockstack_lib::types::chainstate::{StacksAddress, StacksPublicKey};
+    use stackslib::address::AddressHashMode;
+    use stackslib::chainstate::stacks::{StacksPrivateKey, TransactionVersion};
+    use stackslib::types::chainstate::{StacksAddress, StacksPublicKey};
     use serde::Deserialize;
     use degen_base_signer::util_versioning::address_version;
     use url::Url;

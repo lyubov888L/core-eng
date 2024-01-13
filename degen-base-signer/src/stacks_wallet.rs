@@ -4,7 +4,7 @@ use crate::{
     util_versioning::address_version,
 };
 use bitcoin::XOnlyPublicKey;
-use blockstack_lib::{
+use stackslib::{
     chainstate::stacks::{
         StacksTransaction, StacksTransactionSigner, TransactionAnchorMode, TransactionAuth,
         TransactionContractCall, TransactionPayload, TransactionPostConditionMode,
@@ -18,7 +18,7 @@ use blockstack_lib::{
         ClarityName, ContractName, Value,
     },
 };
-use blockstack_lib::vm::types::PrincipalData;
+use stackslib::vm::types::PrincipalData;
 use tracing::info;
 
 #[derive(thiserror::Error, Debug, PartialEq)]
@@ -37,7 +37,7 @@ pub enum Error {
     ClarityRuntimeError(#[from] RuntimeErrorType),
     ///Blockstack error
     #[error("Clarity runtime error ocurred: {0}")]
-    BlockstackError(#[from] blockstack_lib::vm::errors::Error),
+    BlockstackError(#[from] stackslib::vm::errors::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -370,7 +370,7 @@ mod tests {
         },
     };
     use bitcoin::XOnlyPublicKey;
-    use blockstack_lib::{
+    use stackslib::{
         address::{AddressHashMode, C32_ADDRESS_VERSION_TESTNET_SINGLESIG},
         burnchains::{Address, Txid},
         chainstate::{

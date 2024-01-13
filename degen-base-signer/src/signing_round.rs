@@ -14,21 +14,21 @@ use bitcoin::{
     EcdsaSighashType, KeyPair, Network, OutPoint, PrivateKey, PublicKey, SchnorrSighashType,
     Script, TxOut, Witness, XOnlyPublicKey,
 };
-use blockstack_lib::burnchains::bitcoin::address::{BitcoinAddress, SegwitBitcoinAddress};
-use blockstack_lib::burnchains::bitcoin::{
+use stackslib::burnchains::bitcoin::address::{BitcoinAddress, SegwitBitcoinAddress};
+use stackslib::burnchains::bitcoin::{
     BitcoinNetworkType, BitcoinTransaction, BitcoinTxOutput,
 };
-use blockstack_lib::burnchains::{
+use stackslib::burnchains::{
     BurnchainBlockHeader, BurnchainTransaction, PrivateKey as PrivateKeyTrait,
 };
-use blockstack_lib::chainstate::burn::operations::PegOutRequestOp;
-use blockstack_lib::chainstate::burn::Opcodes;
-use blockstack_lib::chainstate::stacks::address::PoxAddress;
+use stackslib::chainstate::burn::operations::PegOutRequestOp;
+use stackslib::chainstate::burn::Opcodes;
+use stackslib::chainstate::stacks::address::PoxAddress;
 use bitcoin::util::address::Address;
-use blockstack_lib::chainstate::stacks::{StacksPrivateKey, StacksTransaction, TransactionVersion};
-use blockstack_lib::types::chainstate::{BurnchainHeaderHash, StacksAddress};
-use blockstack_lib::util::hash::{Hash160, Sha256Sum};
-use blockstack_lib::vm::ContractName;
+use stackslib::chainstate::stacks::{StacksPrivateKey, StacksTransaction, TransactionVersion};
+use stackslib::types::chainstate::{BurnchainHeaderHash, StacksAddress};
+use stackslib::util::hash::{Hash160, Sha256Sum};
+use stackslib::vm::ContractName;
 use hashbrown::{HashMap, HashSet};
 use p256k1::{
     ecdsa,
@@ -71,7 +71,7 @@ use crate::{
 };
 use crate::signing_round::UtxoError::{InvalidUTXO, UTXOAmount};
 use crate::stacks_node::StacksNode;
-use blockstack_lib::burnchains::Address as BitcoinAddressTrait;
+use stackslib::burnchains::Address as BitcoinAddressTrait;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

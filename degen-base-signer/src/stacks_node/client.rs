@@ -2,14 +2,14 @@ use std::time::{Duration, Instant};
 
 use crate::stacks_node::{Error as StacksNodeError, PegInOp, PegOutRequestOp, StacksNode};
 use bitcoin::XOnlyPublicKey;
-use blockstack_lib::{
+use stackslib::{
     chainstate::stacks::StacksTransaction,
     codec::StacksMessageCodec,
     types::chainstate::StacksAddress,
     vm::{types::SequenceData, ClarityName, ContractName, Value as ClarityValue},
 };
-use blockstack_lib::util::hash::Hash160;
-use blockstack_lib::vm::types::{PrincipalData, StandardPrincipalData};
+use stackslib::util::hash::Hash160;
+use stackslib::vm::types::{PrincipalData, StandardPrincipalData};
 use crate::config::{MinerStatus, PublicKeys, SignerKeyIds};
 use reqwest::{
     blocking::{Client, Response},
@@ -812,7 +812,7 @@ mod tests {
     };
     use bincode::config;
 
-    use blockstack_lib::{
+    use stackslib::{
         address::{AddressHashMode, C32_ADDRESS_VERSION_TESTNET_SINGLESIG},
         burnchains::Address,
         chainstate::stacks::{
@@ -823,7 +823,7 @@ mod tests {
         types::chainstate::{StacksPrivateKey, StacksPublicKey},
         util::{hash::Hash160, secp256k1::MessageSignature},
     };
-    use blockstack_lib::util::secp256k1::Secp256k1PrivateKey;
+    use stackslib::util::secp256k1::Secp256k1PrivateKey;
     use crate::peg_wallet::StacksWallet as PegWallet;
     use crate::stacks_node::Error;
     use crate::stacks_wallet::StacksWallet;

@@ -1,14 +1,14 @@
 pub mod client;
 
 use bitcoin::XOnlyPublicKey;
-use blockstack_lib::{
+use stackslib::{
     chainstate::{burn::operations as burn_ops, stacks::StacksTransaction},
     codec::Error as CodecError,
     types::chainstate::StacksAddress,
     vm::{types::serialization::SerializationError, Value as ClarityValue},
 };
-use blockstack_lib::vm::types::{PrincipalData, SequenceData};
-use blockstack_lib::vm::{ClarityName, Value};
+use stackslib::vm::types::{PrincipalData, SequenceData};
+use stackslib::vm::{ClarityName, Value};
 use tracing::info;
 use crate::config::{MinerStatus, PublicKeys, SignerKeyIds};
 use wsts::ecdsa::PublicKey;

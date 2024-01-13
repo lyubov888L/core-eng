@@ -2,9 +2,9 @@ use rusqlite::{Connection as RusqliteConnection, Error as RusqliteError, Row as 
 use std::path::Path;
 use std::str::FromStr;
 
-use blockstack_lib::burnchains::Txid;
-use blockstack_lib::types::chainstate::BurnchainHeaderHash;
-use blockstack_lib::util::HexError;
+use stackslib::burnchains::Txid;
+use stackslib::types::chainstate::BurnchainHeaderHash;
+use stackslib::util::HexError;
 
 use crate::peg_queue::{Error as PegQueueError, PegQueue, SbtcOp};
 use crate::stacks_node::{Error as StacksNodeError, PegInOp, PegOutRequestOp, StacksNode};
@@ -370,7 +370,7 @@ impl FromStr for Status {
 mod tests {
     use crate::stacks_node;
 
-    use blockstack_lib::{
+    use stackslib::{
         chainstate::stacks::address::PoxAddress,
         types::chainstate::StacksAddress,
         util::{hash::Hash160, secp256k1::MessageSignature},

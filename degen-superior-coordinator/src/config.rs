@@ -2,7 +2,7 @@ use std::str::FromStr;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{KeyPair, XOnlyPublicKey};
 use tracing::info;
-use blockstack_lib::{
+use stackslib::{
     address::AddressHashMode,
     burnchains::Address,
     chainstate::stacks::TransactionVersion,
@@ -264,7 +264,7 @@ mod tests {
 
     use super::*;
     use bitcoin::Network as BitcoinNetwork;
-    use blockstack_lib::chainstate::stacks::TransactionVersion;
+    use stackslib::chainstate::stacks::TransactionVersion;
     use std::io::Write;
     use tempdir::TempDir;
 

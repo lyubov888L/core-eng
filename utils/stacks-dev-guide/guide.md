@@ -47,7 +47,7 @@ Cargo packages
 
 | Package Name | Cargo file location | Description
 | --- | --- | ---
-| `blockstack-core` | `/Cargo.toml` |
+| `stackslib` | `/Cargo.toml` |
 | `clarity` | `/clarity/Cargo.toml` |
 | `stacks-node` | `/testnet/stacks-node/Cargo.toml` |
 | `stacks-common` | `/stacks-common/Cargo.toml` |

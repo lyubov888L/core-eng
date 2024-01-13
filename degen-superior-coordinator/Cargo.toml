@@ -10,7 +10,7 @@ edition = "2021"
 
 [dependencies]
 bs58 = { workspace = true }
-blockstack-core = { workspace = true }
+stackslib = { workspace = true }
 clap = { workspace = true }
 degen-base-coordinator = { path = "../degen-base-coordinator" }
 degen-base-signer = { path = "../degen-base-signer" }

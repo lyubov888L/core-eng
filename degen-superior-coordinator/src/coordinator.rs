@@ -2,7 +2,7 @@ use bitcoin::{psbt::Prevouts, util::{
     base58,
     sighash::{Error as SighashError, SighashCache},
 }, hashes::Hash, SchnorrSighashType, XOnlyPublicKey, Address, Txid, PackedLockTime, TxIn, Script, Sequence, Witness, TxOut, OutPoint};
-use blockstack_lib::{types::chainstate::StacksAddress, util::secp256k1::Secp256k1PublicKey};
+use stackslib::{types::chainstate::StacksAddress, util::secp256k1::Secp256k1PublicKey};
 use degen_base_coordinator::{
     coordinator::Error as FrostCoordinatorError, create_coordinator, create_coordinator_from_path,
 };
@@ -23,7 +23,7 @@ use std::{
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use wsts::{common::Signature, field::Element, taproot::SchnorrProof, Point, Scalar};
-use blockstack_lib::vm::types::PrincipalData;
+use stackslib::vm::types::PrincipalData;
 
 use degen_base_signer::bitcoin_wallet::BitcoinWallet;
 use degen_base_signer::stacks_node::{self, Error as StacksNodeError};
@@ -843,9 +843,9 @@ mod tests {
     use crate::coordinator::{CoordinatorHelpers, StacksCoordinator};
     use degen_base_signer::stacks_node::PegOutRequestOp;
     use bitcoin::consensus::Encodable;
-    use blockstack_lib::burnchains::Txid;
-    use blockstack_lib::chainstate::stacks::address::{PoxAddress, PoxAddressType20};
-    use blockstack_lib::types::chainstate::BurnchainHeaderHash;
+    use stackslib::burnchains::Txid;
+    use stackslib::chainstate::stacks::address::{PoxAddress, PoxAddressType20};
+    use stackslib::types::chainstate::BurnchainHeaderHash;
 
     #[ignore]
     #[test]
@@ -863,7 +863,7 @@ mod tests {
         let op = PegOutRequestOp {
             amount: 0,
             recipient: recipient,
-            signature: blockstack_lib::util::secp256k1::MessageSignature([0; 65]),
+            signature: stackslib::util::secp256k1::MessageSignature([0; 65]),
             peg_wallet_address: peg_wallet_address,
             fulfillment_fee: 0,
             memo: vec![],

@@ -1,4 +1,4 @@
-use blockstack_lib::{
+use stackslib::{
     address::{C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG},
     chainstate::stacks::TransactionVersion,
 };
@@ -12,7 +12,7 @@ pub fn address_version(version: &TransactionVersion) -> u8 {
 
 #[cfg(test)]
 pub mod test {
-    use blockstack_lib::{
+    use stackslib::{
         burnchains::{
             bitcoin::{
                 address::{BitcoinAddress, SegwitBitcoinAddress},

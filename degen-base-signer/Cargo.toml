@@ -11,7 +11,7 @@ path = "src/lib.rs"    # The source file of the target.
 crate-type = ["lib"]   # The crate types to generate.
 
 [dependencies]
-blockstack-core = { workspace = true }
+stackslib = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }
 aes-gcm = { workspace = true }

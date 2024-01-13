@@ -1,5 +1,5 @@
-use blockstack_lib::burnchains::Txid;
-use blockstack_lib::types::chainstate::BurnchainHeaderHash;
+use stackslib::burnchains::Txid;
+use stackslib::types::chainstate::BurnchainHeaderHash;
 
 use crate::stacks_node;
 use crate::stacks_node::Error as StacksNodeError;

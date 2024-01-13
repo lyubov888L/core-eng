@@ -10,7 +10,7 @@ edition = "2021"
 
 [dependencies]
 p256k1 = { workspace = true }
-blockstack-core = { workspace = true }
+stackslib = { workspace = true }
 wsts = { workspace = true }
 backoff = { workspace = true }
 clap = { workspace = true }
